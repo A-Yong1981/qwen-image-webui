@@ -32,6 +32,7 @@ from fastapi.staticfiles import StaticFiles
 BASE_URL = "https://www.kaggle.com/api/v1"
 KERNEL_OWNER = "xiongyong5207"
 KERNEL_SLUG = "qwen-image-21-gguf-t4-test"
+KERNEL_REF = f"{KERNEL_OWNER}/{KERNEL_SLUG}"
 WEEKLY_QUOTA_SECONDS = 108000
 POLL_INTERVAL_SECONDS = 60
 MAX_WAIT_SECONDS = 2 * 3600
