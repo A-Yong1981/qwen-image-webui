@@ -1,0 +1,14 @@
+services:
+  qwen-webui:
+    build: .
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./data:/data
+    environment:
+      # 金鑰也可以在這裡填，但建議第一次打開網頁後去「設定」頁填，
+      # 存在 /data/settings.json（權限 600），重建容器也不會丟。
+      KAGGLE_USERNAME: ""
+      KAGGLE_KEY: ""
+    restart: unless-stopped
+    mem_limit: 512m

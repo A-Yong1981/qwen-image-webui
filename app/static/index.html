@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen 生圖工作台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Qwen 生圖工作台</h1>
+  <p class="sub">在 Kaggle 免費 GPU 上生圖，一張約 4 到 5 分鐘，一次只跑一張。</p>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="generate">生圖</button>
+  <button class="tab" data-tab="history">歷史記錄</button>
+  <button class="tab" data-tab="settings">設定</button>
+</nav>
+
+<main>
+  <section id="tab-generate" class="panel active">
+    <label for="prompt">生圖要求（中文就可以，直接寫你想要的畫面）</label>
+    <textarea id="prompt" rows="4" maxlength="2000"
+      placeholder="例如：白天的小電腦店門面，招牌寫著 CHUFENG，櫥窗裡有一台桌上型電腦"></textarea>
+    <button id="generateBtn" class="primary">開始生圖</button>
+    <p id="keyWarning" class="warn hidden">還沒設定 Kaggle 金鑰，請先去「設定」頁填寫用戶名和金鑰。</p>
+    <p id="generateMsg" class="msg"></p>
+
+    <div id="currentJob" class="hidden">
+      <h2>目前任務</h2>
+      <p id="currentStatus" class="status"></p>
+      <p id="currentNote" class="note"></p>
+      <img id="resultImg" class="result hidden" alt="生成的圖片">
+      <div id="resultActions" class="hidden">
+        <a id="downloadBtn" class="primary" href="#" download>下載原圖</a>
+      </div>
+      <p id="currentError" class="error hidden"></p>
+    </div>
+  </section>
+
+  <section id="tab-history" class="panel">
+    <h2>歷史記錄</h2>
+    <p class="note">點一條記錄可以看大圖、下載。</p>
+    <div id="historyList" class="history"></div>
+    <div id="historyDetail" class="hidden">
+      <h3>任務詳情</h3>
+      <p id="detailPrompt" class="prompt"></p>
+      <p id="detailMeta" class="note"></p>
+      <img id="detailImg" class="result" alt="生成的圖片">
+      <div>
+        <a id="detailDownload" class="primary" href="#" download>下載原圖</a>
+        <button id="detailClose">關閉</button>
+      </div>
+      <p id="detailError" class="error hidden"></p>
+    </div>
+  </section>
+
+  <section id="tab-settings" class="panel">
+    <h2>設定</h2>
+    <p class="note">金鑰只存在這台 NAS 的設定檔裡，不會顯示完整內容，也不會寫進日誌。
+      去 Kaggle 設定頁 → API → Create Legacy API Key，下載 kaggle.json，裡面就有用戶名和金鑰。
+      千萬不要把金鑰發在聊天裡。</p>
+    <label for="kaggleUser">Kaggle 用戶名</label>
+    <input id="kaggleUser" type="text" autocomplete="off" placeholder="例如：xiongyong5207">
+    <label for="kaggleKey">Kaggle 長期 API 金鑰</label>
+    <input id="kaggleKey" type="password" autocomplete="off" placeholder="貼上 kaggle.json 裡的 key">
+    <div class="row">
+      <button id="saveSettingsBtn" class="primary">保存</button>
+      <button id="testBtn">測試連線</button>
+    </div>
+    <p id="settingsMsg" class="msg"></p>
+    <h3>額度</h3>
+    <p id="quotaText" class="note">讀取中……</p>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
