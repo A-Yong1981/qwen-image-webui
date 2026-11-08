@@ -7,6 +7,34 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="authScreen" class="auth-screen hidden">
+  <div class="auth-box">
+    <h1>Qwen 生圖工作台</h1>
+
+    <div id="authSetup" class="hidden">
+      <h2>第一次使用：綁定驗證器</h2>
+      <p class="note">用手機上的驗證器 App（Google Authenticator 或 Microsoft Authenticator）掃下面的二維碼；不能掃碼就手動輸入密鑰。然後輸入 App 上顯示的 6 位動態碼，點綁定。</p>
+      <img id="setupQr" class="qr" alt="驗證器二維碼">
+      <p class="note">密鑰（手動輸入用）：<code id="setupSecret"></code></p>
+      <label for="setupCode">6 位動態碼</label>
+      <input id="setupCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="例如：123456">
+      <label class="check"><input id="setupTrust" type="checkbox" checked> 信任此設備 30 天（這台裝置 30 天內不用再輸碼）</label>
+      <button id="bindBtn" class="primary">綁定並登入</button>
+      <p id="setupMsg" class="msg"></p>
+    </div>
+
+    <div id="authLogin" class="hidden">
+      <h2>請輸入動態碼登入</h2>
+      <p class="note">打開手機上的驗證器 App，看 Qwen 生圖工作台那一行的 6 位數字。</p>
+      <label for="loginCode">6 位動態碼</label>
+      <input id="loginCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="例如：123456">
+      <label class="check"><input id="loginTrust" type="checkbox" checked> 信任此設備 30 天（這台裝置 30 天內不用再輸碼）</label>
+      <button id="loginBtn" class="primary">登入</button>
+      <p id="loginMsg" class="msg"></p>
+    </div>
+  </div>
+</div>
+
 <header>
   <h1>Qwen 生圖工作台</h1>
   <p class="sub">在 Kaggle 免費 GPU 上生圖，一張約 4 到 5 分鐘，一次只跑一張。</p>
@@ -20,6 +48,12 @@
 
 <main>
   <section id="tab-generate" class="panel active">
+    <div class="status-card">
+      <h2>伺服器狀態</h2>
+      <p id="serverStatusLine" class="note">讀取中……</p>
+      <p id="serverStatusCurrent" class="note"></p>
+    </div>
+
     <label for="prompt">生圖要求（中文就可以，直接寫你想要的畫面）</label>
     <textarea id="prompt" rows="4" maxlength="2000"
       placeholder="例如：白天的小電腦店門面，招牌寫著 CHUFENG，櫥窗裡有一台桌上型電腦"></textarea>
@@ -30,6 +64,8 @@
     <div id="currentJob" class="hidden">
       <h2>目前任務</h2>
       <p id="currentStatus" class="status"></p>
+      <p class="prompt-label">原始提示詞</p>
+      <p id="currentPrompt" class="prompt"></p>
       <p id="currentNote" class="note"></p>
       <img id="resultImg" class="result hidden" alt="生成的圖片">
       <div id="resultActions" class="hidden">
@@ -41,11 +77,17 @@
 
   <section id="tab-history" class="panel">
     <h2>歷史記錄</h2>
-    <p class="note">點一條記錄可以看大圖、下載。</p>
+    <p class="note">點一條記錄可以看大圖、下載。每條記錄都留著你當時輸入的原始提示詞。</p>
     <div id="historyList" class="history"></div>
     <div id="historyDetail" class="hidden">
       <h3>任務詳情</h3>
+      <p class="prompt-label">原始提示詞</p>
       <p id="detailPrompt" class="prompt"></p>
+      <div class="row">
+        <button id="copyPromptBtn">複製提示詞</button>
+        <button id="reusePromptBtn" class="primary">再用這個提示詞生成</button>
+      </div>
+      <p id="copyMsg" class="msg"></p>
       <p id="detailMeta" class="note"></p>
       <img id="detailImg" class="result" alt="生成的圖片">
       <div>
@@ -72,6 +114,23 @@
     <p id="settingsMsg" class="msg"></p>
     <h3>額度</h3>
     <p id="quotaText" class="note">讀取中……</p>
+
+    <h3>安全驗證</h3>
+    <p id="otpStatus" class="note">讀取中……</p>
+    <div id="trustedDevices" class="devices"></div>
+    <div class="row">
+      <button id="untrustThisBtn">取消信任此設備</button>
+      <button id="replaceOtpBtn">更換驗證器</button>
+      <button id="logoutBtn">登出</button>
+    </div>
+    <p id="securityMsg" class="msg"></p>
+    <div id="replaceBox" class="hidden">
+      <p class="note">更換驗證器要先證明是你本人：輸入目前驗證器 App 上的 6 位動態碼，通過後會顯示新的二維碼，舊的驗證器就作廢了，全部信任裝置也會一併撤銷。</p>
+      <label for="replaceCode">目前的 6 位動態碼</label>
+      <input id="replaceCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="例如：123456">
+      <button id="replaceConfirmBtn" class="primary">確認更換</button>
+      <p id="replaceMsg" class="msg"></p>
+    </div>
   </section>
 </main>
 

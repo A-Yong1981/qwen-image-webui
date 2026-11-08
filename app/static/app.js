@@ -10,6 +10,9 @@ const STATUS_TEXT = {
 let configured = false;
 let jobs = [];
 let currentJobId = null;
+let detailJob = null;
+let authed = false;
+let refreshTimer = null;
 
 function $(id) {
   return document.getElementById(id);
@@ -23,6 +26,24 @@ function fmtTime(iso) {
 function fmtSeconds(s) {
   if (s === null || s === undefined) return "—";
   return Math.round(s) + " 秒";
+}
+
+function fmtUptime(s) {
+  if (s === null || s === undefined) return "—";
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d} 天 ${h} 小時`;
+  if (h > 0) return `${h} 小時 ${m} 分`;
+  return `${m} 分`;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 // ---- 頁籤 ----
@@ -39,10 +60,166 @@ function showTab(name) {
   document.querySelector(`.tab[data-tab="${name}"]`).click();
 }
 
-// ---- 設定 ----
+// ---- 認證：綁定 / 登入 / 信任裝置 ----
+function showAuthScreen() {
+  $("authScreen").classList.remove("hidden");
+}
+
+function hideAuthScreen() {
+  $("authScreen").classList.add("hidden");
+}
+
+async function checkAuth() {
+  try {
+    const r = await fetch("/api/auth/status");
+    const s = await r.json();
+    if (!s.bound) {
+      await showSetup();
+      return;
+    }
+    if (!s.authenticated) {
+      showLogin();
+      return;
+    }
+    enterApp();
+  } catch (e) {
+    showLogin();
+  }
+}
+
+async function showSetup() {
+  authed = false;
+  showAuthScreen();
+  $("authSetup").classList.remove("hidden");
+  $("authLogin").classList.add("hidden");
+  const msg = $("setupMsg");
+  msg.textContent = "產生設定中……";
+  try {
+    const r = await fetch("/api/auth/setup", { method: "POST" });
+    const data = await r.json();
+    if (!r.ok) {
+      msg.textContent = "設定失敗：" + (data.error || "請稍後再試。");
+      return;
+    }
+    $("setupQr").src = "/api/auth/qr?t=" + Date.now();
+    $("setupSecret").textContent =
+      String(data.secret).replace(/(.{4})/g, "$1 ").trim();
+    msg.textContent = "";
+  } catch (e) {
+    msg.textContent = "設定失敗，請重新整理頁面再試。";
+  }
+}
+
+function showLogin() {
+  authed = false;
+  stopRefresh();
+  showAuthScreen();
+  $("authLogin").classList.remove("hidden");
+  $("authSetup").classList.add("hidden");
+  $("loginMsg").textContent = "";
+  const input = $("loginCode");
+  input.value = "";
+  input.focus();
+}
+
+function enterApp() {
+  authed = true;
+  hideAuthScreen();
+  loadSettings();
+  loadQuota();
+  loadStatus();
+  refreshJobs();
+  loadDevices();
+  startRefresh();
+}
+
+function startRefresh() {
+  stopRefresh();
+  refreshTimer = setInterval(() => {
+    refreshJobs();
+    loadQuota();
+    loadStatus();
+  }, 10000);
+}
+
+function stopRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function readCode(input) {
+  return input.value.trim().replace(/\s+/g, "");
+}
+
+$("bindBtn").addEventListener("click", async () => {
+  const code = readCode($("setupCode"));
+  const msg = $("setupMsg");
+  if (!/^\d{6}$/.test(code)) {
+    msg.textContent = "請輸入驗證器上的 6 位數字。";
+    return;
+  }
+  msg.textContent = "驗證中……";
+  const r = await fetch("/api/auth/bind", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code,
+      trust_device: $("setupTrust").checked,
+    }),
+  });
+  const data = await r.json();
+  if (r.ok && data.ok) {
+    $("setupCode").value = "";
+    enterApp();
+  } else {
+    msg.textContent = "綁定失敗：" + (data.error || "請稍後再試。");
+  }
+});
+
+$("loginBtn").addEventListener("click", async () => {
+  const code = readCode($("loginCode"));
+  const msg = $("loginMsg");
+  if (!/^\d{6}$/.test(code)) {
+    msg.textContent = "請輸入驗證器上的 6 位數字。";
+    return;
+  }
+  msg.textContent = "登入中……";
+  const r = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code,
+      trust_device: $("loginTrust").checked,
+    }),
+  });
+  const data = await r.json();
+  if (r.ok && data.ok) {
+    $("loginCode").value = "";
+    enterApp();
+  } else {
+    msg.textContent = "登入失敗：" + (data.error || "請稍後再試。");
+  }
+});
+
+function submitOnEnter(input, btn) {
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      btn.click();
+    }
+  });
+}
+submitOnEnter($("setupCode"), $("bindBtn"));
+submitOnEnter($("loginCode"), $("loginBtn"));
+submitOnEnter($("replaceCode"), $("replaceConfirmBtn"));
+
+// ---- 設定：Kaggle ----
 async function loadSettings() {
   try {
     const r = await fetch("/api/settings");
+    if (r.status === 401) { showLogin(); return; }
     const s = await r.json();
     configured = !!s.kaggle_configured;
     $("kaggleUser").value = s.kaggle_username || "";
@@ -55,6 +232,7 @@ async function loadSettings() {
 async function loadQuota() {
   try {
     const r = await fetch("/api/quota");
+    if (r.status === 401) { showLogin(); return; }
     const q = await r.json();
     $("quotaText").textContent =
       `已用 ${fmtSeconds(q.used_seconds)}／每週 ${fmtSeconds(q.total_seconds)}，` +
@@ -78,6 +256,7 @@ $("saveSettingsBtn").addEventListener("click", async () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, key }),
   });
+  if (r.status === 401) { showLogin(); return; }
   const data = await r.json();
   if (r.ok && data.ok) {
     msg.textContent = "已保存。建議按「測試連線」確認金鑰能用。";
@@ -92,11 +271,115 @@ $("testBtn").addEventListener("click", async () => {
   const msg = $("settingsMsg");
   msg.textContent = "測試連線中……";
   const r = await fetch("/api/settings/test", { method: "POST" });
+  if (r.status === 401) { showLogin(); return; }
   const data = await r.json();
   msg.textContent = data.ok
     ? "連線成功，金鑰能用。"
     : "連線失敗：" + (data.error || "請檢查金鑰是否正確。");
 });
+
+// ---- 設定：安全驗證 ----
+async function loadDevices() {
+  try {
+    const r = await fetch("/api/auth/devices");
+    if (r.status === 401) { showLogin(); return; }
+    const data = await r.json();
+    const list = $("trustedDevices");
+    const devices = data.devices || [];
+    $("otpStatus").textContent =
+      "驗證器已綁定。登入要輸入手機驗證器上的 6 位動態碼；信任的裝置 30 天內不用再輸碼。";
+    if (!devices.length) {
+      list.innerHTML = '<p class="note">目前沒有信任的裝置。</p>';
+      return;
+    }
+    list.innerHTML = "";
+    devices.forEach((d) => {
+      const row = document.createElement("div");
+      row.className = "device-row";
+      const label = document.createElement("span");
+      label.textContent = `${d.device_name}${d.current ? "（這台裝置）" : ""}　到期：${fmtTime(d.expires_at)}`;
+      const btn = document.createElement("button");
+      btn.textContent = "撤銷";
+      btn.addEventListener("click", async () => {
+        await fetch(`/api/auth/devices/${encodeURIComponent(d.id)}/revoke`, { method: "POST" });
+        await loadDevices();
+      });
+      row.appendChild(label);
+      row.appendChild(btn);
+      list.appendChild(row);
+    });
+  } catch (e) {
+    $("otpStatus").textContent = "信任裝置讀取失敗，請稍後再試。";
+  }
+}
+
+$("untrustThisBtn").addEventListener("click", async () => {
+  const msg = $("securityMsg");
+  const r = await fetch("/api/auth/untrust-this", { method: "POST" });
+  if (r.status === 401) { showLogin(); return; }
+  msg.textContent = "已取消信任此設備，下次打開要重新輸動態碼。";
+  await loadDevices();
+});
+
+$("logoutBtn").addEventListener("click", async () => {
+  await fetch("/api/auth/logout", { method: "POST" });
+  showLogin();
+});
+
+$("replaceOtpBtn").addEventListener("click", () => {
+  $("replaceBox").classList.remove("hidden");
+  $("replaceMsg").textContent = "";
+  $("replaceCode").value = "";
+  $("replaceCode").focus();
+});
+
+$("replaceConfirmBtn").addEventListener("click", async () => {
+  const code = readCode($("replaceCode"));
+  const msg = $("replaceMsg");
+  if (!/^\d{6}$/.test(code)) {
+    msg.textContent = "請輸入目前驗證器上的 6 位數字。";
+    return;
+  }
+  msg.textContent = "驗證中……";
+  const r = await fetch("/api/auth/replace", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  const data = await r.json();
+  if (r.ok && data.ok) {
+    $("replaceBox").classList.add("hidden");
+    $("securityMsg").textContent = "舊驗證器已作廢，請掃新的二維碼重新綁定。";
+    await showSetup();
+  } else {
+    msg.textContent = "更換失敗：" + (data.error || "請稍後再試。");
+  }
+});
+
+// ---- 伺服器狀態 ----
+async function loadStatus() {
+  try {
+    const r = await fetch("/api/status");
+    if (r.status === 401) { showLogin(); return; }
+    const s = await r.json();
+    const kaggle = !s.kaggle_configured
+      ? "Kaggle：尚未設定金鑰"
+      : s.kaggle_reachable
+        ? "Kaggle：已連線"
+        : `Kaggle：連不上（${s.kaggle_error || "原因不明"}）`;
+    $("serverStatusLine").textContent =
+      `已運行 ${fmtUptime(s.uptime_seconds)}　${kaggle}　` +
+      `額度已用 ${fmtSeconds(s.quota.used_seconds)}／還剩 ${fmtSeconds(s.quota.remaining_seconds)}　` +
+      `排隊 ${s.counts.queued} 張　進行中 ${s.counts.running} 張　已完成 ${s.counts.completed} 張　失敗 ${s.counts.failed} 張`;
+    const cur = s.current_job;
+    $("serverStatusCurrent").textContent = cur
+      ? `目前任務：${cur.prompt}`
+      : "目前沒有進行中的任務。";
+  } catch (e) {
+    $("serverStatusLine").textContent = "伺服器狀態讀取失敗，請稍後再試。";
+    $("serverStatusCurrent").textContent = "";
+  }
+}
 
 // ---- 生圖 ----
 $("generateBtn").addEventListener("click", async () => {
@@ -118,6 +401,7 @@ $("generateBtn").addEventListener("click", async () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt }),
   });
+  if (r.status === 401) { showLogin(); return; }
   const data = await r.json();
   if (!r.ok) {
     msg.textContent = "提交失敗：" + (data.error || "請稍後再試。");
@@ -127,6 +411,7 @@ $("generateBtn").addEventListener("click", async () => {
   msg.textContent = "已排隊，一張約 4 到 5 分鐘，頁面會自動更新狀態。";
   $("prompt").value = "";
   await refreshJobs();
+  await loadStatus();
 });
 
 function renderCurrentJob() {
@@ -141,6 +426,7 @@ function renderCurrentJob() {
   $("currentStatus").textContent =
     `狀態：${STATUS_TEXT[job.status] || job.status}　建立時間：${fmtTime(job.created_at)}` +
     (job.finished_at ? `　完成時間：${fmtTime(job.finished_at)}` : "");
+  $("currentPrompt").textContent = job.prompt;
   $("currentNote").textContent =
     job.status === "queued"
       ? "在排隊等前面的任務跑完，一次只跑一張。"
@@ -190,6 +476,7 @@ function renderHistory() {
     card.innerHTML = `
       ${thumb}
       <div class="job-info">
+        <p class="prompt-label">原始提示詞</p>
         <p class="prompt">${escapeHtml(job.prompt)}</p>
         <p class="note">${STATUS_TEXT[job.status] || job.status}　${fmtTime(job.created_at)}</p>
         ${job.status === "failed" && job.error
@@ -200,17 +487,11 @@ function renderHistory() {
   });
 }
 
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function showDetail(job) {
+  detailJob = job;
   $("historyDetail").classList.remove("hidden");
   $("detailPrompt").textContent = job.prompt;
+  $("copyMsg").textContent = "";
   $("detailMeta").textContent =
     `${STATUS_TEXT[job.status] || job.status}　建立：${fmtTime(job.created_at)}` +
     `　完成：${fmtTime(job.finished_at)}　生圖用時：${fmtSeconds(job.generation_seconds)}` +
@@ -238,12 +519,51 @@ function showDetail(job) {
 
 $("detailClose").addEventListener("click", () => {
   $("historyDetail").classList.add("hidden");
+  detailJob = null;
+});
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch (err) {
+      ok = false;
+    }
+    document.body.removeChild(ta);
+    return ok;
+  }
+}
+
+$("copyPromptBtn").addEventListener("click", async () => {
+  if (!detailJob) return;
+  const ok = await copyText(detailJob.prompt);
+  $("copyMsg").textContent = ok ? "已複製提示詞。" : "複製失敗，請手動選取文字複製。";
+});
+
+$("reusePromptBtn").addEventListener("click", () => {
+  if (!detailJob) return;
+  $("prompt").value = detailJob.prompt;
+  $("historyDetail").classList.add("hidden");
+  showTab("generate");
+  $("prompt").focus();
+  $("prompt").scrollIntoView({ behavior: "smooth", block: "center" });
 });
 
 // ---- 刷新 ----
 async function refreshJobs() {
   try {
     const r = await fetch("/api/jobs");
+    if (r.status === 401) { showLogin(); return; }
     jobs = await r.json();
     renderCurrentJob();
     renderHistory();
@@ -252,10 +572,4 @@ async function refreshJobs() {
   }
 }
 
-loadSettings();
-loadQuota();
-refreshJobs();
-setInterval(() => {
-  refreshJobs();
-  loadQuota();
-}, 10000);
+checkAuth();
