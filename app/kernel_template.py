@@ -25,6 +25,11 @@ Files (exact sizes from the Hugging Face API, 2026-11-08):
 Run with: kaggle kernels push -p <folder> --accelerator NvidiaTeslaT4 -t 7200
 Then:    kaggle kernels status xiongyong5207/qwen-image-21-gguf-t4-test
          kaggle kernels output xiongyong5207/qwen-image-21-gguf-t4-test -p <out>
+
+v2.4: 支援參考生圖（官方 Qwen-Image-2.1 編輯工作流）與面板選項
+（尺寸、比例、種子、步數、CFG、參考強度）。提示詞與選項由工作台後端
+注入模板裡的兩個佔位符，工作流由 build_workflow() 按選項拼出；
+純文字模式仍走原來的 v4 工作流。
 """
 import glob
 import json
@@ -74,6 +79,117 @@ def run_optional(cmd, **kw):
 def http_get_json(url, timeout=10):
     with urllib.request.urlopen(url, timeout=timeout) as resp:
         return json.load(resp)
+
+
+# 生圖選項由工作台後端注入（見 app/main.py build_kernel_script）。
+# 選項佔位符是 JSON 字串，json.loads 還原成 dict。
+OPTS = json.loads(__JOB_OPTIONS_JSON__)
+PROMPT = __USER_PROMPT_JSON__
+
+
+def build_workflow(opts, prompt):
+    """按選項拼 ComfyUI API 格式工作流（純函式，不碰磁碟、不碰網路）。
+
+    文生圖（mode=t2i）：沿用已驗證的 v4 工作流，只把寬、高、步數、
+    CFG、種子換成選項裡的值，節點與模型檔案一點不變。
+    參考生圖（mode=single/multi）：官方 Qwen-Image-2.1 編輯工作流
+    （Comfy-Org 官方範本 image_qwen_image_2_1_image_edit，API 格式見
+    NewGwen2.1 的 qwen_image_2.1_gguf_edit_api.json）：
+    LoadImage -> TextEncodeQwenImage21（images.image_N + VAE），
+    image_1 的 latent 決定畫布；QwenImage21Cache 接在模型與採樣器之間；
+    提示詞裡用 <image1>、<image2> 指第幾張參考圖。
+    官方工作流沒有「參考強度」這個參數，這裡用採樣器的 denoise 實現：
+    denoise = 1 - 強度，強度越大越像原圖（預設 0.7 -> denoise 0.3）。
+    出圖檔名固定是 qwen_test_chufeng，後端按這個名字取圖，兩種模式一樣。"""
+    mode = str(opts.get("mode") or "t2i").strip()
+    if mode == "text":
+        mode = "t2i"  # 舊寫法，當成文生圖。
+    if mode not in ("t2i", "single", "multi"):
+        # 絕不默默掉進參考分支：之前有呼叫方傳了 "text" 卻拿到
+        # 參考工作流（denoise 0.3、沒有參考圖），結果會是一張糊圖。
+        raise ValueError(f"未知的生圖模式: {mode!r}")
+    width = int(opts.get("width") or 768)
+    height = int(opts.get("height") or 768)
+    steps = int(opts.get("steps") or 20)
+    cfg = float(opts.get("cfg") or 1.0)
+    seed = int(opts.get("seed") if opts.get("seed") is not None else 42)
+    if mode == "t2i":
+        return {
+            "1": {"class_type": "UnetLoaderGGUF",
+                  "inputs": {"unet_name": "qwen-image-2.1-Q4_K_M.gguf"}},
+            "2": {"class_type": "CLIPLoader",
+                  "inputs": {"clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+                             "type": "qwen_image"}},
+            "3": {"class_type": "VAELoader",
+                  "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"}},
+            "4": {"class_type": "CLIPTextEncode",
+                  "inputs": {"clip": ["2", 0], "text": prompt}},
+            "9": {"class_type": "CLIPTextEncode",
+                  "inputs": {"clip": ["2", 0],
+                             "text": "blurry, low quality, distorted"}},
+            "5": {"class_type": "EmptyLatentImage",
+                  "inputs": {"batch_size": 1, "height": height, "width": width}},
+            "6": {"class_type": "KSampler",
+                  "inputs": {"cfg": cfg, "denoise": 1.0, "latent_image": ["5", 0],
+                             "model": ["1", 0], "negative": ["9", 0],
+                             "positive": ["4", 0], "sampler_name": "euler",
+                             "scheduler": "simple", "seed": seed, "steps": steps}},
+            "7": {"class_type": "VAEDecode",
+                  "inputs": {"samples": ["6", 0], "vae": ["3", 0]}},
+            "8": {"class_type": "SaveImage",
+                  "inputs": {"filename_prefix": "qwen_test_chufeng",
+                             "images": ["7", 0]}},
+        }
+    # 參考生圖：官方編輯工作流（見上方說明）。
+    # ref_count 優先用 opts 的值；沒給就從 refs 清單推（呼叫方可能
+    # 只傳 refs）。單圖必須恰好 1 張，多圖 1–4 張；張數不對直接
+    # 報錯，絕不拼一個沒有 LoadImage 的「參考」工作流——那會用
+    # denoise 0.3 在全新 latent 上採樣，出糊圖。
+    ref_count = int(opts.get("ref_count") or 0)
+    if ref_count <= 0 and isinstance(opts.get("refs"), list):
+        ref_count = len(opts["refs"])
+    if mode == "single" and ref_count != 1:
+        raise ValueError(f"單圖參考必須恰好 1 張參考圖，拿到 {ref_count} 張")
+    if mode == "multi" and not (1 <= ref_count <= 4):
+        raise ValueError(f"多圖參考必須是 1–4 張參考圖，拿到 {ref_count} 張")
+    strength = float(opts.get("ref_strength", 0.7))
+    denoise = round(1.0 - max(0.0, min(1.0, strength)), 4)
+    encode_inputs = {
+        "clip": ["2", 0],
+        "vae": ["3", 0],
+        "prompt": prompt,
+        "negative_prompt": "",
+        "resolution": 0,
+    }
+    workflow = {
+        "1": {"class_type": "UnetLoaderGGUF",
+              "inputs": {"unet_name": "qwen-image-2.1-Q4_K_M.gguf"}},
+        "2": {"class_type": "CLIPLoader",
+              "inputs": {"clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+                         "type": "qwen_image", "device": "default"}},
+        "3": {"class_type": "VAELoader",
+              "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"}},
+        "4": {"class_type": "TextEncodeQwenImage21", "inputs": encode_inputs},
+        "9": {"class_type": "QwenImage21Cache",
+              "inputs": {"model": ["1", 0], "device": "auto", "dtype": "default"}},
+        "6": {"class_type": "KSampler",
+              "inputs": {"model": ["9", 0], "positive": ["4", 0],
+                         "negative": ["4", 1], "latent_image": ["4", 2],
+                         "seed": seed, "steps": steps, "cfg": cfg,
+                         "sampler_name": "euler", "scheduler": "simple",
+                         "denoise": denoise}},
+        "7": {"class_type": "VAEDecode",
+              "inputs": {"samples": ["6", 0], "vae": ["3", 0]}},
+        "8": {"class_type": "SaveImage",
+              "inputs": {"filename_prefix": "qwen_test_chufeng",
+                         "images": ["7", 0]}},
+    }
+    for i in range(1, ref_count + 1):
+        node_id = str(9 + i)
+        workflow[node_id] = {"class_type": "LoadImage",
+                             "inputs": {"image": f"ref_{i}.jpg"}}
+        encode_inputs[f"images.image_{i}"] = [node_id, 0]
+    return workflow
 
 
 # 1. Hardware check (v2: tolerant). Print the real GPU, RAM, disk.
@@ -185,36 +301,41 @@ try:
             log(f"could not read comfyui.log: {e}")
         raise SystemExit("ComfyUI did not come up in 10 minutes")
 
-    # 5. Submit 1 workflow via the API. 768x768, 20 steps, cfg 1, euler.
+    # 5. Submit 1 workflow via the API. 尺寸、步數、CFG、種子都從選項來，
+    # 預設就是已驗證的 v4 配方（768x768、20 步、cfg 1、euler）。
     # Workflow is embedded here so the script does not depend on a
     # separate file being present in /kaggle/working at run time.
-    log("== 5. generate 1 test image ==")
-    workflow = {
-        "1": {"class_type": "UnetLoaderGGUF",
-              "inputs": {"unet_name": "qwen-image-2.1-Q4_K_M.gguf"}},
-        "2": {"class_type": "CLIPLoader",
-              "inputs": {"clip_name": "qwen3vl_8b_int8_convrot.safetensors",
-                         "type": "qwen_image"}},
-        "3": {"class_type": "VAELoader",
-              "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"}},
-        "4": {"class_type": "CLIPTextEncode",
-              "inputs": {"clip": ["2", 0],
-                         "text": __USER_PROMPT_JSON__}},
-        "9": {"class_type": "CLIPTextEncode",
-              "inputs": {"clip": ["2", 0], "text": "blurry, low quality, distorted"}},
-        "5": {"class_type": "EmptyLatentImage",
-              "inputs": {"batch_size": 1, "height": 768, "width": 768}},
-        "6": {"class_type": "KSampler",
-              "inputs": {"cfg": 1.0, "denoise": 1.0, "latent_image": ["5", 0],
-                         "model": ["1", 0], "negative": ["9", 0],
-                         "positive": ["4", 0], "sampler_name": "euler",
-                         "scheduler": "simple", "seed": 42, "steps": 20}},
-        "7": {"class_type": "VAEDecode",
-              "inputs": {"samples": ["6", 0], "vae": ["3", 0]}},
-        "8": {"class_type": "SaveImage",
-              "inputs": {"filename_prefix": "qwen_test_chufeng",
-                         "images": ["7", 0]}},
-    }
+    log("== 5. generate 1 image ==")
+    if OPTS.get("mode") in ("single", "multi"):
+        # 參考生圖：先把參考圖從工作台的公開路由下載到
+        # ComfyUI 的 input 目錄。第一張圖按選的尺寸縮好，
+        # 它決定出圖畫布；後面的圖保持原尺寸。
+        input_dir = os.path.join(COMFY, "input")
+        os.makedirs(input_dir, exist_ok=True)
+        ref_urls = OPTS.get("ref_urls") or []
+        if not ref_urls:
+            raise SystemExit("參考模式沒有參考圖網址")
+        from PIL import Image
+        for i, url in enumerate(ref_urls, 1):
+            local = os.path.join(input_dir, f"ref_{i}.jpg")
+            log(f"downloading ref {i}: {url}")
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "qwen-webui/2.4"})
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                data = resp.read()
+            with open(local, "wb") as f:
+                f.write(data)
+            im = Image.open(local)
+            im.load()
+            im = im.convert("RGB")
+            if i == 1:
+                im = im.resize((int(OPTS["width"]), int(OPTS["height"])),
+                               Image.LANCZOS)
+            im.save(local, "JPEG", quality=92)
+            log(f"ref {i} saved: {local} size={im.size}")
+        log(f"denoise={1.0 - float(OPTS.get('ref_strength', 0.7)):.2f} "
+            f"(參考強度 {float(OPTS.get('ref_strength', 0.7)):.2f})")
+    workflow = build_workflow(OPTS, PROMPT)
     body = json.dumps({"prompt": workflow}).encode()
     req = urllib.request.Request(
         "http://127.0.0.1:8188/prompt", data=body,

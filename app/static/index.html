@@ -40,9 +40,76 @@
 
 <main>
   <section id="tab-generate" class="panel active">
-    <label for="prompt">生圖要求（中文就可以，直接寫你想要的畫面）</label>
+    <label>生圖模式</label>
+    <div class="mode-seg" id="modeSeg">
+      <button type="button" class="mode-btn active" data-mode="t2i">純文字生圖</button>
+      <button type="button" class="mode-btn" data-mode="single">單圖參考</button>
+      <button type="button" class="mode-btn" data-mode="multi">多圖參考</button>
+    </div>
+    <p class="note" id="modeHelp">只用文字描述畫面，不用上傳圖片。適合從零開始生一張新圖。</p>
+
+    <div id="refArea" class="hidden">
+      <label for="refInput">參考圖</label>
+      <input id="refInput" type="file" accept="image/jpeg,image/png,image/webp">
+      <p class="note" id="refHelp">只選 1 張圖（jpg、png、webp，每張不超過 10MB）。這張圖決定出圖的底子，會按你選的尺寸先縮好。</p>
+      <p id="refCount" class="note"></p>
+      <div id="refThumbs" class="ref-thumbs"></div>
+    </div>
+
+    <label for="prompt" id="promptLabel">生圖要求（中文就可以，直接寫你想要的畫面）</label>
     <textarea id="prompt" rows="4" maxlength="2000"
       placeholder="例如：白天的小電腦店門面，招牌寫著 CHUFENG，櫥窗裡有一台桌上型電腦"></textarea>
+
+    <label for="aspect">畫面比例</label>
+    <select id="aspect">
+      <option value="1:1" selected>1:1（正方形）</option>
+      <option value="16:9">16:9（橫屏）</option>
+      <option value="9:16">9:16（豎屏）</option>
+      <option value="4:3">4:3（橫）</option>
+      <option value="3:4">3:4（豎）</option>
+      <option value="3:2">3:2（橫）</option>
+      <option value="2:3">2:3（豎）</option>
+    </select>
+    <p class="note">比例就是圖是橫的還是豎的、方還是長。選了比例，寬和高會自動填好。建議：發抖音、小紅書用 9:16 豎屏；做電腦壁紙用 16:9 橫屏；頭像、商品圖用 1:1 正方形。</p>
+
+    <div class="row">
+      <div>
+        <label for="width">寬</label>
+        <input id="width" type="number" min="256" max="1280" step="16" value="768">
+      </div>
+      <div>
+        <label for="height">高</label>
+        <input id="height" type="number" min="256" max="1280" step="16" value="768">
+      </div>
+    </div>
+    <p class="note">寬和高就是出圖的像素大小。改比例會自動填，手動改也行（會按 32 取整）。建議：最大邊不要超過 1024，圖越大跑得越慢、越容易失敗。</p>
+
+    <label for="seed">種子</label>
+    <div class="row">
+      <input id="seed" type="number" min="0" placeholder="留空表示隨機">
+      <button id="randomSeedBtn" type="button">隨機</button>
+    </div>
+    <p class="note">同一句話加同一個種子，會出同一張圖；想換一張新的就點隨機。建議：留空隨機就行，看到喜歡的圖再去歷史記錄裡抄它的種子。</p>
+
+    <label for="steps">步數</label>
+    <input id="steps" type="number" min="10" max="50" step="1" value="20">
+    <p class="note">步數就是模型一筆一筆細化的次數。步數越多細節越好，但跑得越慢。建議：預設 20 就夠用；想出圖快一點可以降到 10，摳細節再加到 30 左右，不要超過 50。</p>
+
+    <label for="cfg">引導係數 CFG</label>
+    <input id="cfg" type="number" min="1" max="4" step="0.1" value="1">
+    <p class="note">引導係數就是模型有多聽你的話。1 是官方推薦值，畫面最自然；調高會更貼合你的要求，但容易過銳、過亮。建議：預設 1.0 不用動，想讓它更聽話再慢慢加到 2。</p>
+
+    <div id="refStrengthRow" class="hidden">
+      <label for="refStrength">參考強度</label>
+      <div class="row">
+        <input id="refStrength" type="range" min="0" max="1" step="0.05" value="0.7">
+        <span id="refStrengthVal" class="range-val">0.70</span>
+      </div>
+      <p class="note">參考強度就是出圖時保留多少原圖的樣子，越大越像原圖、改得越少，越小改得越多。預設 0.7：原圖的樣子留七成、按你的要求改三成。想改得多一點就往小調。</p>
+    </div>
+
+    <p class="note">採樣器固定用已驗證的組合（euler / simple），不用改。</p>
+
     <button id="generateBtn" class="primary">開始生圖</button>
     <p id="keyWarning" class="warn hidden">還沒設定 Kaggle 金鑰，請先去「設定」頁填寫用戶名和金鑰。</p>
     <p id="generateMsg" class="msg"></p>
@@ -52,6 +119,7 @@
       <p id="currentStatus" class="status"></p>
       <p class="prompt-label">原始提示詞</p>
       <p id="currentPrompt" class="prompt"></p>
+      <p id="currentOptions" class="note"></p>
       <p id="currentNote" class="note"></p>
       <img id="resultImg" class="result hidden" alt="生成的圖片">
       <div id="resultActions" class="hidden">

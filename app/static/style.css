@@ -104,7 +104,8 @@ main {
 
 label { display: block; font-weight: 600; margin: 12px 0 6px; color: #1F3D4D; }
 
-textarea, input[type="text"], input[type="password"] {
+textarea, input[type="text"], input[type="password"],
+input[type="number"], select {
   width: 100%;
   padding: 12px;
   font-size: 16px;
@@ -113,9 +114,11 @@ textarea, input[type="text"], input[type="password"] {
   border: 1px solid #CFE3EC;
   border-radius: 12px;
   outline: none;
+  box-sizing: border-box;
 }
 
-textarea:focus, input[type="text"]:focus, input[type="password"]:focus {
+textarea:focus, input[type="text"]:focus, input[type="password"]:focus,
+input[type="number"]:focus, select:focus {
   border-color: #0E7C9B;
   box-shadow: 0 0 0 3px rgba(14, 124, 155, 0.15);
 }
@@ -152,7 +155,99 @@ button:hover, a.primary:hover { opacity: 0.92; }
   box-shadow: none;
 }
 
+/* 模式三段選擇：沿用上方頁籤的分段樣式。 */
+.mode-seg {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(11, 111, 164, 0.08);
+  border-radius: 999px;
+}
+
+.mode-btn {
+  flex: 1;
+  margin-top: 0;
+  padding: 9px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 500;
+  color: #4A7186;
+}
+
+.mode-btn.active {
+  background: #fff;
+  color: #0B6FA4;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(11, 111, 164, 0.15);
+}
+
+input[type="file"] {
+  width: 100%;
+  margin-top: 6px;
+  font-size: 15px;
+  color: #1F3D4D;
+}
+
+input[type="range"] {
+  flex: 1;
+  accent-color: #0E7C9B;
+}
+
+.range-val {
+  min-width: 44px;
+  text-align: right;
+  font-weight: 700;
+  color: #0B6FA4;
+  align-self: center;
+}
+
+/* 參考圖縮略圖：每張可單獨移除。 */
+.ref-thumbs {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.ref-thumb {
+  position: relative;
+  width: 96px;
+  height: 96px;
+}
+
+.ref-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid #CFE3EC;
+}
+
+.ref-thumb button {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 24px;
+  height: 24px;
+  margin-top: 0;
+  padding: 0;
+  line-height: 1;
+  border: none;
+  border-radius: 50%;
+  background: #0E7C9B;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(11, 111, 164, 0.3);
+}
+
 .row { display: flex; gap: 12px; flex-wrap: wrap; }
+
+.row > div { flex: 1; min-width: 120px; }
 
 .hidden { display: none !important; }
 

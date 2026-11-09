@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Qwen 生圖工作台後端：FastAPI + SQLite + 後台執行緒調 Kaggle API。
 
-只依賴 fastapi / uvicorn，其餘全是標準庫
+只依賴 fastapi / uvicorn / python-multipart / Pillow，其餘全是標準庫
 （sqlite3、urllib、json、threading、hmac、hashlib）。
 流程（已在 Kaggle T4 x2 上跑通過，v4 COMPLETE）：
   前端提交提示詞 -> 後端把提示詞注入核心腳本模板 -> SaveKernel 提交新版本
@@ -18,7 +18,9 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
+import shutil
 import sqlite3
 import threading
 import time
@@ -33,9 +35,11 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 
+import ipaddress
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 
 BASE_URL = "https://www.kaggle.com/api/v1"
 KERNEL_OWNER = "xiongyong5207"
@@ -55,8 +59,29 @@ DB_PATH = DATA_DIR / "jobs.db"
 SETTINGS_PATH = DATA_DIR / "settings.json"
 AUTH_PATH = DATA_DIR / "auth.json"
 JOBS_DIR = DATA_DIR / "jobs"
+REFS_DIR = DATA_DIR / "refs"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 TEMPLATE_PATH = Path(__file__).resolve().parent / "kernel_template.py"
+
+# 參考圖：官方範本最多 10 張，本工作台先做到最多 4 張。
+MAX_REFS = 4
+MAX_REF_SIZE_MB = 10
+MAX_REF_SIZE_BYTES = MAX_REF_SIZE_MB * 1024 * 1024
+MAX_REF_EDGE = 1024
+REF_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
+REF_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+REF_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+# 比例 -> 寬 x 高（全部是 32 的倍數，出圖尺寸用這個填）。
+ASPECT_SIZES = {
+    "1:1": (768, 768),
+    "16:9": (1024, 576),
+    "9:16": (576, 1024),
+    "4:3": (1024, 768),
+    "3:4": (768, 1024),
+    "3:2": (1024, 672),
+    "2:3": (672, 1024),
+}
 
 KEY_ERROR_TEXT = "金鑰無效或過期，請在設定頁重新填寫"
 NO_KEY_TEXT = "尚未填寫 Kaggle 金鑰，請先去設定頁填寫"
@@ -324,6 +349,7 @@ def _conn():
 def init_db():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    REFS_DIR.mkdir(parents=True, exist_ok=True)
     with DB_LOCK:
         conn = _conn()
         conn.execute("""CREATE TABLE IF NOT EXISTS jobs (
@@ -335,7 +361,13 @@ def init_db():
             gpu_seconds REAL,
             generation_seconds REAL,
             error TEXT,
-            kernel_version INTEGER)""")
+            kernel_version INTEGER,
+            options TEXT)""")
+        # v2.4：舊庫沒有 options 欄位，第一次啟動時補上。
+        cols = [r[1] for r in conn.execute(
+            "PRAGMA table_info(jobs)").fetchall()]
+        if "options" not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN options TEXT")
         conn.commit()
         conn.close()
 
@@ -345,19 +377,31 @@ def _now():
 
 
 def _row_to_job(row):
+    try:
+        raw_options = row["options"]
+    except (IndexError, KeyError):
+        raw_options = None
+    try:
+        options = json.loads(raw_options) if raw_options else None
+    except Exception:
+        options = None
     return {"id": row["id"], "prompt": row["prompt"], "status": row["status"],
             "created_at": row["created_at"], "finished_at": row["finished_at"],
             "gpu_seconds": row["gpu_seconds"],
             "generation_seconds": row["generation_seconds"],
-            "error": row["error"], "kernel_version": row["kernel_version"]}
+            "error": row["error"], "kernel_version": row["kernel_version"],
+            "options": options}
 
 
-def create_job(prompt):
-    job_id = uuid.uuid4().hex[:12]
+def create_job(prompt, options=None, job_id=None):
+    job_id = job_id or uuid.uuid4().hex[:12]
+    opts_json = (json.dumps(options, ensure_ascii=False)
+                 if options else None)
     with DB_LOCK:
         conn = _conn()
-        conn.execute("INSERT INTO jobs (id, prompt, status, created_at) "
-                     "VALUES (?, ?, 'queued', ?)", (job_id, prompt, _now()))
+        conn.execute("INSERT INTO jobs (id, prompt, status, created_at, options) "
+                     "VALUES (?, ?, 'queued', ?, ?)",
+                     (job_id, prompt, _now(), opts_json))
         conn.commit()
         conn.close()
     return job_id
@@ -409,14 +453,126 @@ def complete_job(job_id, generation_seconds, gpu_seconds):
                generation_seconds=generation_seconds, gpu_seconds=gpu_seconds)
 
 
+# ---------------------------------------------------------------- 生圖選項
+def _clamp_int(value, lo, hi, default):
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _clamp_float(value, lo, hi, default):
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _clamp_size(value):
+    """出圖寬高：夾到 256-1280，再往下取整到 32 的倍數
+    （ComfyUI 的 latent 以 32 為單位，編輯模式畫布也吃 32 的倍數）。"""
+    n = _clamp_int(value, 256, 1280, 768)
+    return max(256, min(1280, (n // 32) * 32))
+
+
+def _aspect_label(width, height):
+    """從寬高反推比例名稱，七種比例都對不上就叫「自定」。"""
+    if not height:
+        return "自定"
+    ratio = width / height
+    for name, (aw, ah) in ASPECT_SIZES.items():
+        if abs(ratio - aw / ah) < 0.01:
+            return name
+    return "自定"
+
+
+def _normalize_options(raw, ref_count=None, ref_urls=None):
+    """把前端傳來的選項整理成一份完整的記錄。
+
+    全部欄位都有預設值（沿用已驗證的 v4 配方），缺了、填錯了、
+    超出範圍了都自動回到合法值，不會因為一個欄位填錯就整單失敗。
+    種子留空表示隨機，後端隨機一個並存進記錄，歷史裡看得到，
+    同一句話加同一個種子就能複現同一張圖。"""
+    raw = raw if isinstance(raw, dict) else {}
+    mode = str(raw.get("mode") or "t2i").strip()
+    if mode not in ("t2i", "single", "multi"):
+        mode = "t2i"
+    aspect = str(raw.get("aspect") or "1:1").strip()
+    default_w, default_h = ASPECT_SIZES.get(aspect, (768, 768))
+    width = _clamp_size(raw.get("width") if raw.get("width") not in (None, "")
+                        else default_w)
+    height = _clamp_size(raw.get("height") if raw.get("height") not in (None, "")
+                         else default_h)
+    seed_raw = raw.get("seed")
+    if seed_raw in (None, ""):
+        seed = secrets.randbelow(10 ** 15)
+    else:
+        seed = _clamp_int(seed_raw, 0, 10 ** 15 - 1,
+                          secrets.randbelow(10 ** 15))
+    steps = _clamp_int(raw.get("steps"), 10, 50, 20)
+    cfg = _clamp_float(raw.get("cfg"), 1.0, 4.0, 1.0)
+    ref_strength = _clamp_float(raw.get("ref_strength"), 0.0, 1.0, 0.7)
+    return {
+        "mode": mode,
+        "ref_count": int(ref_count if ref_count is not None
+                         else raw.get("ref_count") or 0),
+        "ref_urls": list(ref_urls if ref_urls is not None
+                         else raw.get("ref_urls") or []),
+        "aspect": _aspect_label(width, height),
+        "width": width,
+        "height": height,
+        "seed": seed,
+        "steps": steps,
+        "cfg": cfg,
+        "ref_strength": ref_strength,
+    }
+
+
+def _is_private_host(host):
+    """本機或內網位址：參考圖網址不能用這種位址，Kaggle 那邊打不開。"""
+    host = (host or "").lower()
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_private
+    except ValueError:
+        return False  # 是域名不是 IP，當作公網處理。
+
+
+def _public_base_url(request):
+    """參考圖要給 Kaggle 內核下載，必須是公網能打開的完整網址。
+
+    優先用使用者現在打開網站的網址（走隧道進來的就是公網域名）；
+    如果是本機或內網位址，就用環境變數 REF_BASE_URL，
+    沒設就預設用隧道的域名。"""
+    host = request.url.hostname or ""
+    if host and not _is_private_host(host):
+        return str(request.base_url).rstrip("/")
+    return os.environ.get("REF_BASE_URL",
+                          "https://qwen.aynas.de5.net").rstrip("/")
+
+
 # ---------------------------------------------------------------- 核心腳本
-def build_kernel_script(prompt):
-    """把使用者提示詞注入模板。json.dumps 轉義，絕不用字串拼接。"""
+def build_kernel_script(prompt, options=None):
+    """把使用者提示詞與生圖選項注入模板。json.dumps 轉義，絕不用字串拼接。"""
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
     if template.count("__USER_PROMPT_JSON__") != 1:
         raise RuntimeError("核心腳本模板佔位符異常")
-    return template.replace("__USER_PROMPT_JSON__",
-                            json.dumps(prompt, ensure_ascii=True))
+    if template.count("__JOB_OPTIONS_JSON__") != 1:
+        raise RuntimeError("核心腳本模板佔位符異常")
+    opts = _normalize_options(options or {})
+    # 選項先 json.dumps 成 JSON 字串，再包一層：模板裡是
+    # OPTS = json.loads(__JOB_OPTIONS_JSON__)，佔位符要是一個
+    # JSON 字串字面量（不是直接放物件字面量，避免 true/false/null
+    # 在 Python 裡不合法）。
+    return (template
+            .replace("__USER_PROMPT_JSON__",
+                     json.dumps(prompt, ensure_ascii=True))
+            .replace("__JOB_OPTIONS_JSON__",
+                     json.dumps(json.dumps(opts, ensure_ascii=True),
+                                ensure_ascii=True)))
 
 
 def extract_error_log(output):
@@ -494,7 +650,7 @@ def run_job(job):
         fail_job(job_id, NO_KEY_TEXT)
         return
     try:
-        script = build_kernel_script(job["prompt"])
+        script = build_kernel_script(job["prompt"], job.get("options"))
         body = {
             "slug": KERNEL_REF,
             "newTitle": KERNEL_SLUG,
@@ -682,6 +838,9 @@ async def auth_change_password(request: Request):
 
 @app.post("/api/jobs")
 async def create_job_endpoint(request: Request):
+    """純文字生圖：只收提示詞 + 面板選項（尺寸、比例、種子、步數、CFG）。
+    不傳選項就沿用已驗證的 v4 配方（768x768、20 步、CFG 1.0、種子 42）。
+    參考模式請走 /api/jobs/with-refs。"""
     try:
         data = await request.json()
     except Exception:
@@ -692,7 +851,93 @@ async def create_job_endpoint(request: Request):
     if len(prompt) > 2000:
         return JSONResponse({"error": "提示詞太長，請控制在 2000 字以內"},
                             status_code=400)
-    job_id = create_job(prompt)
+    raw = dict(data) if isinstance(data, dict) else {}
+    if (raw.get("mode") or "t2i") != "t2i":
+        return JSONResponse(
+            {"error": "參考生圖請用帶參考圖的提交方式"}, status_code=400)
+    options = _normalize_options(raw)
+    job_id = create_job(prompt, options)
+    return {"id": job_id, "status": "queued"}
+
+
+def _process_ref_file(data, index, filename, content_type):
+    """檢查一張參考圖，轉成 JPEG、長邊縮到 1024 像素，回傳處理好的位元組。
+
+    只接受 jpg/png/webp，每張不超過 10MB；壞掉的圖、不是圖的檔案都拒絕。"""
+    if len(data) > MAX_REF_SIZE_BYTES:
+        return None, f"第 {index} 張圖超過 {MAX_REF_SIZE_MB}MB，請換張小一點的圖"
+    if content_type and content_type.lower() not in REF_CONTENT_TYPES:
+        ext = Path(filename or "").suffix.lower()
+        if ext not in REF_EXTENSIONS:
+            return None, f"第 {index} 張圖格式不對，只接受 jpg、png、webp"
+    try:
+        img = Image.open(BytesIO(data))
+        img.load()
+    except Exception:
+        return None, f"第 {index} 張圖打不開，請確認是正常的圖片檔案"
+    if img.format not in REF_IMAGE_FORMATS:
+        return None, f"第 {index} 張圖格式不對，只接受 jpg、png、webp"
+    img = img.convert("RGB")
+    img.thumbnail((MAX_REF_EDGE, MAX_REF_EDGE), Image.LANCZOS)
+    out = BytesIO()
+    img.save(out, "JPEG", quality=88)
+    return out.getvalue(), None
+
+
+@app.post("/api/jobs/with-refs")
+async def create_job_with_refs(request: Request):
+    """參考生圖：一次收表單欄位（提示詞、模式、比例、寬、高、種子、
+    步數、CFG、參考強度）+ 圖片檔案。
+
+    圖存在 /data/refs/<任務id>/（任務 id 是隨機的，猜不到，相當於口令），
+    再用公開路由 /refs/{任務id}/{檔名} 提供給 Kaggle 內核下載。
+    單圖參考只能傳 1 張，多圖參考最多 4 張。"""
+    try:
+        form = await request.form()
+    except Exception:
+        return JSONResponse({"error": "上傳內容讀取失敗"}, status_code=400)
+    prompt = (form.get("prompt") or "").strip()
+    if not prompt:
+        return JSONResponse({"error": "提示詞不能為空"}, status_code=400)
+    if len(prompt) > 2000:
+        return JSONResponse({"error": "提示詞太長，請控制在 2000 字以內"},
+                            status_code=400)
+    mode = (form.get("mode") or "").strip()
+    if mode not in ("single", "multi"):
+        return JSONResponse(
+            {"error": "請選擇單圖參考或多圖參考"}, status_code=400)
+    files = form.getlist("refs")
+    if mode == "single" and len(files) != 1:
+        return JSONResponse({"error": "單圖參考只能上傳 1 張圖"},
+                            status_code=400)
+    if mode == "multi" and not (1 <= len(files) <= MAX_REFS):
+        return JSONResponse(
+            {"error": f"多圖參考最多上傳 {MAX_REFS} 張圖"}, status_code=400)
+    processed = []
+    for i, f in enumerate(files, 1):
+        data = await f.read()
+        blob, error = _process_ref_file(
+            data, i, f.filename or "", f.content_type or "")
+        if error:
+            return JSONResponse({"error": error}, status_code=400)
+        processed.append(blob)
+    job_id = uuid.uuid4().hex[:12]
+    ref_dir = REFS_DIR / job_id
+    try:
+        ref_dir.mkdir(parents=True, exist_ok=True)
+        for i, blob in enumerate(processed, 1):
+            (ref_dir / f"ref_{i}.jpg").write_bytes(blob)
+    except OSError:
+        shutil.rmtree(ref_dir, ignore_errors=True)
+        return JSONResponse({"error": "參考圖保存失敗，請再試一次"},
+                            status_code=500)
+    base = _public_base_url(request)
+    ref_urls = [f"{base}/refs/{job_id}/ref_{i}.jpg"
+                for i in range(1, len(processed) + 1)]
+    raw = {k: v for k, v in form.items() if k != "refs"}
+    options = _normalize_options(raw, ref_count=len(processed),
+                                 ref_urls=ref_urls)
+    create_job(prompt, options, job_id=job_id)
     return {"id": job_id, "status": "queued"}
 
 
@@ -718,7 +963,29 @@ def get_image(job_id: str):
                         filename=f"qwen-{job_id}.png")
 
 
-# 刪任務的檔案：{id}.png / {id}.hardware.json / {id}.summary.json。
+@app.get("/refs/{job_id}/{filename}")
+def get_ref(job_id: str, filename: str):
+    """公開路由：給 Kaggle 內核腳本下載參考圖，不鑑權
+    （內核那邊沒有登入憑證）。
+
+    任務 id 是隨機的 12 位十六進位，相當於口令，猜不到；
+    檔名只允許 ref_1.jpg 這種格式，/ 與 .. 一律擋掉，防目錄穿越。"""
+    if not re.fullmatch(r"[0-9a-f]{12}", job_id):
+        return JSONResponse({"error": "找不到這個檔案"}, status_code=404)
+    if not re.fullmatch(r"ref_[0-9]+\.jpg", filename):
+        return JSONResponse({"error": "找不到這個檔案"}, status_code=404)
+    base = (REFS_DIR / job_id).resolve()
+    try:
+        path = (base / filename).resolve()
+    except (OSError, RuntimeError):
+        return JSONResponse({"error": "找不到這個檔案"}, status_code=404)
+    if path.parent != base or not path.is_file():
+        return JSONResponse({"error": "找不到這個檔案"}, status_code=404)
+    return FileResponse(path, media_type="image/jpeg", filename=filename)
+
+
+# 刪任務的檔案：{id}.png / {id}.hardware.json / {id}.summary.json
+# 加上這個任務的參考圖目錄 /data/refs/{id}/。
 # 只刪這個任務自己的檔案，絕不碰別的目錄。
 _JOB_FILE_SUFFIXES = (".png", ".hardware.json", ".summary.json")
 
@@ -729,6 +996,10 @@ def _delete_job_files(job_id):
             (JOBS_DIR / f"{job_id}{suffix}").unlink(missing_ok=True)
         except OSError:
             pass
+    try:
+        shutil.rmtree(REFS_DIR / job_id, ignore_errors=True)
+    except OSError:
+        pass
 
 
 @app.delete("/api/jobs/{job_id}")
