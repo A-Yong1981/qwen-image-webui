@@ -694,6 +694,20 @@ async def auth_gate(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def no_cache_static(request: Request, call_next):
+    """靜態頁面不給瀏覽器快取：上次升級後，舊版 index.html/app.js 被瀏覽器
+    快取了 4 小時，新版一直出不來。加了這個頭，以後每次打開都是最新版。"""
+    resp = await call_next(request)
+    path = request.url.path
+    if not path.startswith("/api/") and (
+            path == "/" or path.endswith((".html", ".js", ".css"))):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}
