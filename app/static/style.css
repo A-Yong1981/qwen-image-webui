@@ -11,11 +11,29 @@ body {
 header {
   background: #17375e;
   color: #fff;
-  padding: 20px 16px;
+  padding: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
 }
 
+.header-text { min-width: 0; }
 header h1 { margin: 0; font-size: 22px; }
 header .sub { margin: 4px 0 0; opacity: 0.85; font-size: 14px; }
+
+/* 伺服器狀態：頁面右上角，兩行小字；窄屏時自動換到標題下方。 */
+.header-status {
+  flex-shrink: 0;
+  max-width: 55%;
+  text-align: right;
+  font-size: 12px;
+  line-height: 1.6;
+  opacity: 0.92;
+  padding-top: 2px;
+}
+
+.header-status p { margin: 2px 0; color: #dbe6f2; }
 
 .tabs {
   display: flex;
@@ -106,17 +124,6 @@ button:hover, a.primary:hover { opacity: 0.9; }
   margin: 12px 0 2px;
   font-weight: bold;
 }
-
-.status-card {
-  border: 1px solid #cfd8e3;
-  border-radius: 8px;
-  background: #f0f5fa;
-  padding: 12px 14px;
-  margin-bottom: 16px;
-}
-
-.status-card h2 { margin: 0 0 6px; font-size: 17px; }
-.status-card p { margin: 4px 0; }
 
 .auth-screen {
   position: fixed;
@@ -229,7 +236,14 @@ code {
 .job-info p { margin: 4px 0; }
 
 @media (max-width: 600px) {
+  header { flex-wrap: wrap; }
   header h1 { font-size: 19px; }
+  .header-status {
+    flex-basis: 100%;
+    max-width: 100%;
+    text-align: left;
+    padding-top: 0;
+  }
   .tab { font-size: 15px; }
   .thumb { width: 72px; height: 72px; }
 }

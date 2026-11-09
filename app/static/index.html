@@ -36,8 +36,14 @@
 </div>
 
 <header>
-  <h1>Qwen 生圖工作台</h1>
-  <p class="sub">在 Kaggle 免費 GPU 上生圖，一張約 4 到 5 分鐘，一次只跑一張。</p>
+  <div class="header-text">
+    <h1>Qwen 生圖工作台</h1>
+    <p class="sub">在 Kaggle 免費 GPU 上生圖，一張約 4 到 5 分鐘，一次只跑一張。</p>
+  </div>
+  <div class="header-status">
+    <p id="serverStatusLine" class="note">讀取中……</p>
+    <p id="serverStatusCurrent" class="note"></p>
+  </div>
 </header>
 
 <nav class="tabs">
@@ -48,12 +54,6 @@
 
 <main>
   <section id="tab-generate" class="panel active">
-    <div class="status-card">
-      <h2>伺服器狀態</h2>
-      <p id="serverStatusLine" class="note">讀取中……</p>
-      <p id="serverStatusCurrent" class="note"></p>
-    </div>
-
     <label for="prompt">生圖要求（中文就可以，直接寫你想要的畫面）</label>
     <textarea id="prompt" rows="4" maxlength="2000"
       placeholder="例如：白天的小電腦店門面，招牌寫著 CHUFENG，櫥窗裡有一台桌上型電腦"></textarea>
@@ -107,6 +107,7 @@
     <input id="kaggleUser" type="text" autocomplete="off" placeholder="例如：xiongyong5207">
     <label for="kaggleKey">Kaggle 長期 API 金鑰</label>
     <input id="kaggleKey" type="password" autocomplete="off" placeholder="貼上 kaggle.json 裡的 key">
+    <p id="keySavedNote" class="note"></p>
     <div class="row">
       <button id="saveSettingsBtn" class="primary">保存</button>
       <button id="testBtn">測試連線</button>

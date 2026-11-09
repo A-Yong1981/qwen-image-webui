@@ -215,6 +215,11 @@ submitOnEnter($("setupCode"), $("bindBtn"));
 submitOnEnter($("loginCode"), $("loginBtn"));
 submitOnEnter($("replaceCode"), $("replaceConfirmBtn"));
 
+function truncateText(s, n) {
+  s = String(s || "");
+  return s.length > n ? s.slice(0, n) + "……" : s;
+}
+
 // ---- 設定：Kaggle ----
 async function loadSettings() {
   try {
@@ -223,6 +228,13 @@ async function loadSettings() {
     const s = await r.json();
     configured = !!s.kaggle_configured;
     $("kaggleUser").value = s.kaggle_username || "";
+    $("kaggleKey").value = "";
+    $("kaggleKey").placeholder = s.key_saved
+      ? "已保存的金鑰（留空表示不改）"
+      : "貼上 kaggle.json 裡的 key";
+    $("keySavedNote").textContent = s.key_saved
+      ? `金鑰已保存${s.key_hint ? "（" + s.key_hint + "）" : ""}，要換金鑰再貼新的進來。`
+      : "";
     $("keyWarning").classList.toggle("hidden", configured);
   } catch (e) {
     configured = false;
@@ -246,8 +258,8 @@ $("saveSettingsBtn").addEventListener("click", async () => {
   const username = $("kaggleUser").value.trim();
   const key = $("kaggleKey").value.trim();
   const msg = $("settingsMsg");
-  if (!username || !key) {
-    msg.textContent = "用戶名和金鑰都要填。";
+  if (!username && !key) {
+    msg.textContent = "沒有要改的內容，用戶名和金鑰都留空了。";
     return;
   }
   msg.textContent = "保存中……";
@@ -259,7 +271,9 @@ $("saveSettingsBtn").addEventListener("click", async () => {
   if (r.status === 401) { showLogin(); return; }
   const data = await r.json();
   if (r.ok && data.ok) {
-    msg.textContent = "已保存。建議按「測試連線」確認金鑰能用。";
+    msg.textContent = key
+      ? "已保存，金鑰已保存。建議按「測試連線」確認金鑰能用。"
+      : "已保存，金鑰未變。";
     $("kaggleKey").value = "";
     await loadSettings();
   } else {
@@ -369,11 +383,11 @@ async function loadStatus() {
         : `Kaggle：連不上（${s.kaggle_error || "原因不明"}）`;
     $("serverStatusLine").textContent =
       `已運行 ${fmtUptime(s.uptime_seconds)}　${kaggle}　` +
-      `額度已用 ${fmtSeconds(s.quota.used_seconds)}／還剩 ${fmtSeconds(s.quota.remaining_seconds)}　` +
-      `排隊 ${s.counts.queued} 張　進行中 ${s.counts.running} 張　已完成 ${s.counts.completed} 張　失敗 ${s.counts.failed} 張`;
+      `額度剩 ${fmtSeconds(s.quota.remaining_seconds)}　` +
+      `排隊 ${s.counts.queued}　進行中 ${s.counts.running}`;
     const cur = s.current_job;
     $("serverStatusCurrent").textContent = cur
-      ? `目前任務：${cur.prompt}`
+      ? `目前任務：${truncateText(cur.prompt, 40)}`
       : "目前沒有進行中的任務。";
   } catch (e) {
     $("serverStatusLine").textContent = "伺服器狀態讀取失敗，請稍後再試。";

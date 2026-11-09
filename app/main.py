@@ -969,22 +969,42 @@ def server_status():
 @app.get("/api/settings")
 def get_settings():
     s = load_settings()
-    return {"kaggle_configured": bool(s["username"] and s["key"]),
-            "kaggle_username": s["username"]}
+    key = s["key"] or ""
+    if len(key) >= 8:
+        hint = "••••" + key[-4:]
+    elif key:
+        hint = "••••"
+    else:
+        hint = ""
+    return {"kaggle_configured": bool(s["username"] and key),
+            "kaggle_username": s["username"],
+            "key_saved": bool(key),
+            "key_hint": hint}
 
 
 @app.post("/api/settings")
 async def save_settings_endpoint(request: Request):
+    """部分更新：金鑰留空表示沿用已保存的金鑰，用戶名留空表示沿用原來的
+    用戶名；兩個都空才回 400。絕不回傳完整金鑰。"""
     try:
         data = await request.json()
     except Exception:
         return JSONResponse({"error": "請求內容不是合法的 JSON"}, status_code=400)
     username = (data.get("username") or "").strip() if isinstance(data, dict) else ""
     key = (data.get("key") or "").strip() if isinstance(data, dict) else ""
-    if not username or not key:
-        return JSONResponse({"error": "用戶名和金鑰都要填"}, status_code=400)
-    save_settings(username, key)
-    return {"ok": True}
+    if not username and not key:
+        return JSONResponse({"error": "沒有要改的內容，用戶名和金鑰都留空了"},
+                            status_code=400)
+    current = load_settings()
+    new_username = username or current["username"]
+    new_key = key or current["key"]
+    if not new_username or not new_key:
+        return JSONResponse(
+            {"error": "用戶名和金鑰都要有，現在還缺一項，請填上"},
+            status_code=400)
+    save_settings(new_username, new_key)
+    return {"ok": True, "key_saved": bool(new_key),
+            "key_changed": bool(key)}
 
 
 @app.post("/api/settings/test")
