@@ -718,6 +718,59 @@ def get_image(job_id: str):
                         filename=f"qwen-{job_id}.png")
 
 
+# 刪任務的檔案：{id}.png / {id}.hardware.json / {id}.summary.json。
+# 只刪這個任務自己的檔案，絕不碰別的目錄。
+_JOB_FILE_SUFFIXES = (".png", ".hardware.json", ".summary.json")
+
+
+def _delete_job_files(job_id):
+    for suffix in _JOB_FILE_SUFFIXES:
+        try:
+            (JOBS_DIR / f"{job_id}{suffix}").unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+@app.delete("/api/jobs/{job_id}")
+def delete_job_endpoint(job_id: str):
+    """刪一條已結束的任務（資料庫記錄 + 圖片檔案）。
+    排隊中或進行中的任務不給刪。"""
+    with DB_LOCK:
+        conn = _conn()
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            conn.close()
+            return JSONResponse({"error": "找不到這個任務"}, status_code=404)
+        if row["status"] in ("queued", "running"):
+            conn.close()
+            return JSONResponse({"error": "任務進行中，不能刪"}, status_code=400)
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        conn.commit()
+        conn.close()
+    _delete_job_files(job_id)
+    return {"ok": True}
+
+
+@app.post("/api/jobs/clear")
+def clear_jobs_endpoint():
+    """清空全部已結束的任務（資料庫記錄 + 圖片檔案），
+    排隊中或進行中的任務不動。"""
+    with DB_LOCK:
+        conn = _conn()
+        rows = conn.execute(
+            "SELECT id FROM jobs WHERE status IN ('completed', 'failed')"
+            ).fetchall()
+        ids = [r["id"] for r in rows]
+        conn.execute(
+            "DELETE FROM jobs WHERE status IN ('completed', 'failed')")
+        conn.commit()
+        conn.close()
+    for job_id in ids:
+        _delete_job_files(job_id)
+    return {"ok": True, "deleted": len(ids)}
+
+
 @app.get("/api/quota")
 def quota():
     with DB_LOCK:

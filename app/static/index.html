@@ -62,8 +62,12 @@
   </section>
 
   <section id="tab-history" class="panel">
-    <h2>歷史記錄</h2>
+    <div class="history-head">
+      <h2>歷史記錄</h2>
+      <button id="clearHistoryBtn" class="btn-danger" type="button">清空歷史</button>
+    </div>
     <p class="note">點一條記錄可以看大圖、下載。每條記錄都留著你當時輸入的原始提示詞。</p>
+    <p id="historyMsg" class="msg"></p>
     <div id="historyList" class="history"></div>
     <div id="historyDetail" class="hidden">
       <h3>任務詳情</h3>
@@ -79,6 +83,7 @@
       <div>
         <a id="detailDownload" class="primary" href="#" download>下載原圖</a>
         <button id="detailClose">關閉</button>
+        <button id="detailDeleteBtn" class="btn-danger" type="button">刪除這條記錄</button>
       </div>
       <p id="detailError" class="error hidden"></p>
     </div>

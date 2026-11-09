@@ -395,9 +395,71 @@ function renderHistory() {
           ? `<p class="error">失敗原因：${escapeHtml(job.error)}</p>` : ""}
       </div>`;
     card.addEventListener("click", () => showDetail(job));
+    if (job.status === "completed" || job.status === "failed") {
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "job-delete btn-danger";
+      del.textContent = "刪除";
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteJob(job);
+      });
+      card.appendChild(del);
+    }
     list.appendChild(card);
   });
 }
+
+// ---- 歷史記錄：刪除 ----
+async function deleteJob(job) {
+  if (!job) return;
+  if (!window.confirm("確定刪除這條記錄嗎？圖片也會一起刪掉。")) return;
+  const msg = $("historyMsg");
+  try {
+    const r = await fetch(`/api/jobs/${encodeURIComponent(job.id)}`,
+                          { method: "DELETE" });
+    if (r.status === 401) { showLogin(); return; }
+    const data = await r.json();
+    if (!r.ok) {
+      msg.textContent = "刪除失敗：" + (data.error || "請稍後再試。");
+      return;
+    }
+    if (detailJob && detailJob.id === job.id) {
+      $("historyDetail").classList.add("hidden");
+      detailJob = null;
+    }
+    if (currentJobId === job.id) currentJobId = null;
+    msg.textContent = "已刪除。";
+    await refreshJobs();
+  } catch (e) {
+    msg.textContent = "刪除失敗，請稍後再試。";
+  }
+}
+
+$("clearHistoryBtn").addEventListener("click", async () => {
+  if (!window.confirm("確定清空全部已完成的歷史記錄嗎？進行中的任務不會動。")) return;
+  const msg = $("historyMsg");
+  msg.textContent = "清空中……";
+  try {
+    const r = await fetch("/api/jobs/clear", { method: "POST" });
+    if (r.status === 401) { showLogin(); return; }
+    const data = await r.json();
+    if (!r.ok) {
+      msg.textContent = "清空失敗：" + (data.error || "請稍後再試。");
+      return;
+    }
+    $("historyDetail").classList.add("hidden");
+    detailJob = null;
+    msg.textContent = `已清空 ${data.deleted || 0} 條記錄。`;
+    await refreshJobs();
+  } catch (e) {
+    msg.textContent = "清空失敗，請稍後再試。";
+  }
+});
+
+$("detailDeleteBtn").addEventListener("click", () => {
+  if (detailJob) deleteJob(detailJob);
+});
 
 function showDetail(job) {
   detailJob = job;
@@ -411,6 +473,8 @@ function showDetail(job) {
   const img = $("detailImg");
   const dl = $("detailDownload");
   const err = $("detailError");
+  $("detailDeleteBtn").style.display =
+    (job.status === "completed" || job.status === "failed") ? "" : "none";
   if (job.status === "completed") {
     img.src = `/api/jobs/${job.id}/image?t=${Date.now()}`;
     img.style.display = "";
