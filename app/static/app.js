@@ -10,7 +10,8 @@ const STATUS_TEXT = {
 let configured = false;
 let jobs = [];
 let currentJobId = null;
-let detailJob = null;
+let previewJob = null;
+let displayedJob = null;
 let authed = false;
 let refreshTimer = null;
 
@@ -514,6 +515,7 @@ $("generateBtn").addEventListener("click", async () => {
     return;
   }
   currentJobId = data.id;
+  previewJob = null;
   msg.textContent = "已排隊，一張約 4 到 5 分鐘，頁面會自動更新狀態。";
   $("prompt").value = "";
   refFiles = [];
@@ -524,18 +526,27 @@ $("generateBtn").addEventListener("click", async () => {
 
 function renderCurrentJob() {
   const box = $("currentJob");
-  const job = jobs.find((j) => j.id === currentJobId) || jobs[0];
+  const autoJob = jobs.find((j) => j.id === currentJobId) || jobs[0];
+  // 使用者在歷史記錄點了一張圖，就顯示那張；否則顯示最新一張任務。
+  // 每次刷新都按 id 重新對上最新資料，狀態變了預覽也會跟著變；被刪掉就回到自動。
+  if (previewJob) {
+    previewJob = jobs.find((j) => j.id === previewJob.id) || null;
+  }
+  const job = previewJob || autoJob;
+  displayedJob = job || null;
   if (!job) {
     box.classList.add("hidden");
+    $("previewEmpty").classList.remove("hidden");
     return;
   }
-  currentJobId = job.id;
+  $("previewEmpty").classList.add("hidden");
+  if (!previewJob) currentJobId = job.id;
   box.classList.remove("hidden");
   $("currentStatus").textContent =
     `狀態：${STATUS_TEXT[job.status] || job.status}　建立時間：${fmtTime(job.created_at)}` +
     (job.finished_at ? `　完成時間：${fmtTime(job.finished_at)}` : "");
   $("currentPrompt").textContent = job.prompt;
-  $("currentOptions").textContent = fmtOptions(job.options);
+  $("currentOptions").textContent = fmtOptionsFull(job.options);
   $("currentNote").textContent =
     job.status === "queued"
       ? "在排隊等前面的任務跑完，一次只跑一張。"
@@ -565,6 +576,8 @@ function renderCurrentJob() {
     img.classList.add("hidden");
     actions.classList.add("hidden");
   }
+  // 預覽區的刪除按鈕只對已完成的任務顯示。
+  $("detailDeleteBtn").style.display = job.status === "completed" ? "" : "none";
 }
 
 // ---- 歷史記錄 ----
@@ -592,7 +605,7 @@ function renderHistory() {
         ${job.status === "failed" && job.error
           ? `<p class="error">失敗原因：${escapeHtml(job.error)}</p>` : ""}
       </div>`;
-    card.addEventListener("click", () => showDetail(job));
+    card.addEventListener("click", () => showPreview(job));
     if (job.status === "completed" || job.status === "failed") {
       const del = document.createElement("button");
       del.type = "button";
@@ -622,9 +635,8 @@ async function deleteJob(job) {
       msg.textContent = "刪除失敗：" + (data.error || "請稍後再試。");
       return;
     }
-    if (detailJob && detailJob.id === job.id) {
-      $("historyDetail").classList.add("hidden");
-      detailJob = null;
+    if (previewJob && previewJob.id === job.id) {
+      previewJob = null;
     }
     if (currentJobId === job.id) currentJobId = null;
     msg.textContent = "已刪除。";
@@ -646,8 +658,7 @@ $("clearHistoryBtn").addEventListener("click", async () => {
       msg.textContent = "清空失敗：" + (data.error || "請稍後再試。");
       return;
     }
-    $("historyDetail").classList.add("hidden");
-    detailJob = null;
+    previewJob = null;
     msg.textContent = `已清空 ${data.deleted || 0} 條記錄。`;
     await refreshJobs();
   } catch (e) {
@@ -656,46 +667,15 @@ $("clearHistoryBtn").addEventListener("click", async () => {
 });
 
 $("detailDeleteBtn").addEventListener("click", () => {
-  if (detailJob) deleteJob(detailJob);
+  if (displayedJob) deleteJob(displayedJob);
 });
 
-function showDetail(job) {
-  detailJob = job;
-  $("historyDetail").classList.remove("hidden");
-  $("detailPrompt").textContent = job.prompt;
-  $("copyMsg").textContent = "";
-  $("detailMeta").textContent =
-    `${STATUS_TEXT[job.status] || job.status}　建立：${fmtTime(job.created_at)}` +
-    `　完成：${fmtTime(job.finished_at)}　生圖用時：${fmtSeconds(job.generation_seconds)}` +
-    `　任務總用時：${fmtSeconds(job.gpu_seconds)}` +
-    (job.options ? `　${fmtOptionsFull(job.options)}` : "");
-  const img = $("detailImg");
-  const dl = $("detailDownload");
-  const err = $("detailError");
-  $("detailDeleteBtn").style.display =
-    (job.status === "completed" || job.status === "failed") ? "" : "none";
-  if (job.status === "completed") {
-    img.src = `/api/jobs/${job.id}/image?t=${Date.now()}`;
-    img.style.display = "";
-    dl.href = `/api/jobs/${job.id}/image`;
-    dl.setAttribute("download", `qwen-${job.id}.png`);
-    dl.style.display = "";
-    err.classList.add("hidden");
-  } else {
-    img.style.display = "none";
-    dl.style.display = "none";
-    err.textContent = job.status === "failed"
-      ? "失敗原因：" + (job.error || "未知原因")
-      : "這張圖還沒有產生。";
-    err.classList.remove("hidden");
-  }
-  $("historyDetail").scrollIntoView({ behavior: "smooth" });
+function showPreview(job) {
+  previewJob = job;
+  renderCurrentJob();
+  showTab("generate");
+  $("currentJob").scrollIntoView({ behavior: "smooth" });
 }
-
-$("detailClose").addEventListener("click", () => {
-  $("historyDetail").classList.add("hidden");
-  detailJob = null;
-});
 
 async function copyText(text) {
   try {
@@ -720,16 +700,16 @@ async function copyText(text) {
 }
 
 $("copyPromptBtn").addEventListener("click", async () => {
-  if (!detailJob) return;
-  const ok = await copyText(detailJob.prompt);
+  if (!displayedJob) return;
+  const ok = await copyText(displayedJob.prompt);
   $("copyMsg").textContent = ok ? "已複製提示詞。" : "複製失敗，請手動選取文字複製。";
 });
 
 $("reusePromptBtn").addEventListener("click", () => {
-  if (!detailJob) return;
-  $("prompt").value = detailJob.prompt;
+  if (!displayedJob) return;
+  $("prompt").value = displayedJob.prompt;
   // 把上次的選項一起帶回面板（參考圖要重新上傳，瀏覽器留不住圖）。
-  const opts = detailJob.options || {};
+  const opts = displayedJob.options || {};
   if (opts.mode) setMode(opts.mode);
   if (opts.aspect &&
       Array.from($("aspect").options).some((o) => o.value === opts.aspect)) {
@@ -744,8 +724,6 @@ $("reusePromptBtn").addEventListener("click", () => {
     $("refStrength").value = opts.ref_strength;
     $("refStrengthVal").textContent = Number(opts.ref_strength).toFixed(2);
   }
-  $("historyDetail").classList.add("hidden");
-  showTab("generate");
   if (opts.mode && opts.mode !== "t2i") {
     $("generateMsg").textContent = "已帶回上次的設定，參考圖請重新上傳。";
   }

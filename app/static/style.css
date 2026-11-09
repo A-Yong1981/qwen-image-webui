@@ -52,7 +52,7 @@ header .sub { margin: 4px 0 0; color: #5B7E8F; font-size: 14px; }
   display: flex;
   gap: 4px;
   padding: 4px;
-  max-width: 920px;
+  max-width: 1240px;
   margin: 14px auto 0;
   background: rgba(11, 111, 164, 0.08);
   border-radius: 999px;
@@ -79,7 +79,7 @@ header .sub { margin: 4px 0 0; color: #5B7E8F; font-size: 14px; }
 }
 
 main {
-  max-width: 920px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 14px 16px 48px;
 }
@@ -98,6 +98,58 @@ main {
 }
 
 .panel.active { display: block; }
+
+/* 生圖頁左右兩欄：左邊控制區固定寬、欄內可捲動；右邊預覽區佔剩餘寬度。 */
+.gen-layout {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+}
+
+.gen-controls {
+  flex: 0 0 400px;
+  min-width: 0;
+  position: sticky;
+  top: 96px;
+  max-height: calc(100vh - 116px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.gen-preview {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(11, 111, 164, 0.10);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.gen-preview h2 { margin: 0 0 8px; }
+
+/* 預覽區的操作按鈕（複製／再用／刪除）靠左一排，空間不夠自動換行。 */
+.preview-actions { margin-top: 14px; }
+
+/* 設定頁：功能拆成三張獨立卡片，橫向一排、空間不夠自動換行。 */
+.settings-cards {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: stretch;
+  margin-top: 14px;
+}
+
+.settings-card {
+  flex: 1 1 260px;
+  min-width: 260px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(11, 111, 164, 0.12);
+  border-radius: 18px;
+  padding: 16px;
+  box-shadow: 0 6px 18px rgba(11, 111, 164, 0.06);
+}
+
+.settings-card h3 { margin: 0 0 8px; }
 
 .panel h2 { margin: 0; font-size: 19px; color: #0B6FA4; }
 .panel h3 { margin: 20px 0 4px; font-size: 16px; color: #0B6FA4; }
@@ -364,6 +416,22 @@ code {
   font-size: 14px;
   flex-shrink: 0;
   align-self: flex-start;
+}
+
+@media (max-width: 900px) {
+  /* 窄屏：兩欄上下疊起來，控制區在上、預覽區在下；設定卡片也上下疊。 */
+  .gen-layout { flex-direction: column; }
+  .gen-controls {
+    flex: none;
+    width: 100%;
+    position: static;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+  .gen-preview { width: 100%; }
+  .settings-cards { flex-direction: column; }
+  .settings-card { min-width: 0; }
 }
 
 @media (max-width: 600px) {
