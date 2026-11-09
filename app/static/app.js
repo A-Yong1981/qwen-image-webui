@@ -60,7 +60,7 @@ function showTab(name) {
   document.querySelector(`.tab[data-tab="${name}"]`).click();
 }
 
-// ---- 認證：綁定 / 登入 / 信任裝置 ----
+// ---- 認證：帳號密碼 ----
 function showAuthScreen() {
   $("authScreen").classList.remove("hidden");
 }
@@ -73,10 +73,6 @@ async function checkAuth() {
   try {
     const r = await fetch("/api/auth/status");
     const s = await r.json();
-    if (!s.bound) {
-      await showSetup();
-      return;
-    }
     if (!s.authenticated) {
       showLogin();
       return;
@@ -87,39 +83,13 @@ async function checkAuth() {
   }
 }
 
-async function showSetup() {
-  authed = false;
-  showAuthScreen();
-  $("authSetup").classList.remove("hidden");
-  $("authLogin").classList.add("hidden");
-  const msg = $("setupMsg");
-  msg.textContent = "產生設定中……";
-  try {
-    const r = await fetch("/api/auth/setup", { method: "POST" });
-    const data = await r.json();
-    if (!r.ok) {
-      msg.textContent = "設定失敗：" + (data.error || "請稍後再試。");
-      return;
-    }
-    $("setupQr").src = "/api/auth/qr?t=" + Date.now();
-    $("setupSecret").textContent =
-      String(data.secret).replace(/(.{4})/g, "$1 ").trim();
-    msg.textContent = "";
-  } catch (e) {
-    msg.textContent = "設定失敗，請重新整理頁面再試。";
-  }
-}
-
 function showLogin() {
   authed = false;
   stopRefresh();
   showAuthScreen();
-  $("authLogin").classList.remove("hidden");
-  $("authSetup").classList.add("hidden");
   $("loginMsg").textContent = "";
-  const input = $("loginCode");
-  input.value = "";
-  input.focus();
+  $("loginPass").value = "";
+  $("loginUser").focus();
 }
 
 function enterApp() {
@@ -129,7 +99,6 @@ function enterApp() {
   loadQuota();
   loadStatus();
   refreshJobs();
-  loadDevices();
   startRefresh();
 }
 
@@ -149,54 +118,23 @@ function stopRefresh() {
   }
 }
 
-function readCode(input) {
-  return input.value.trim().replace(/\s+/g, "");
-}
-
-$("bindBtn").addEventListener("click", async () => {
-  const code = readCode($("setupCode"));
-  const msg = $("setupMsg");
-  if (!/^\d{6}$/.test(code)) {
-    msg.textContent = "請輸入驗證器上的 6 位數字。";
-    return;
-  }
-  msg.textContent = "驗證中……";
-  const r = await fetch("/api/auth/bind", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code,
-      trust_device: $("setupTrust").checked,
-    }),
-  });
-  const data = await r.json();
-  if (r.ok && data.ok) {
-    $("setupCode").value = "";
-    enterApp();
-  } else {
-    msg.textContent = "綁定失敗：" + (data.error || "請稍後再試。");
-  }
-});
-
 $("loginBtn").addEventListener("click", async () => {
-  const code = readCode($("loginCode"));
+  const username = $("loginUser").value.trim();
+  const password = $("loginPass").value;
   const msg = $("loginMsg");
-  if (!/^\d{6}$/.test(code)) {
-    msg.textContent = "請輸入驗證器上的 6 位數字。";
+  if (!username || !password) {
+    msg.textContent = "請輸入帳號和密碼。";
     return;
   }
   msg.textContent = "登入中……";
   const r = await fetch("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code,
-      trust_device: $("loginTrust").checked,
-    }),
+    body: JSON.stringify({ username, password }),
   });
   const data = await r.json();
   if (r.ok && data.ok) {
-    $("loginCode").value = "";
+    $("loginPass").value = "";
     enterApp();
   } else {
     msg.textContent = "登入失敗：" + (data.error || "請稍後再試。");
@@ -211,9 +149,9 @@ function submitOnEnter(input, btn) {
     }
   });
 }
-submitOnEnter($("setupCode"), $("bindBtn"));
-submitOnEnter($("loginCode"), $("loginBtn"));
-submitOnEnter($("replaceCode"), $("replaceConfirmBtn"));
+submitOnEnter($("loginUser"), $("loginBtn"));
+submitOnEnter($("loginPass"), $("loginBtn"));
+submitOnEnter($("confirmPass"), $("changePassBtn"));
 
 function truncateText(s, n) {
   s = String(s || "");
@@ -292,81 +230,41 @@ $("testBtn").addEventListener("click", async () => {
     : "連線失敗：" + (data.error || "請檢查金鑰是否正確。");
 });
 
-// ---- 設定：安全驗證 ----
-async function loadDevices() {
-  try {
-    const r = await fetch("/api/auth/devices");
-    if (r.status === 401) { showLogin(); return; }
-    const data = await r.json();
-    const list = $("trustedDevices");
-    const devices = data.devices || [];
-    $("otpStatus").textContent =
-      "驗證器已綁定。登入要輸入手機驗證器上的 6 位動態碼；信任的裝置 30 天內不用再輸碼。";
-    if (!devices.length) {
-      list.innerHTML = '<p class="note">目前沒有信任的裝置。</p>';
-      return;
-    }
-    list.innerHTML = "";
-    devices.forEach((d) => {
-      const row = document.createElement("div");
-      row.className = "device-row";
-      const label = document.createElement("span");
-      label.textContent = `${d.device_name}${d.current ? "（這台裝置）" : ""}　到期：${fmtTime(d.expires_at)}`;
-      const btn = document.createElement("button");
-      btn.textContent = "撤銷";
-      btn.addEventListener("click", async () => {
-        await fetch(`/api/auth/devices/${encodeURIComponent(d.id)}/revoke`, { method: "POST" });
-        await loadDevices();
-      });
-      row.appendChild(label);
-      row.appendChild(btn);
-      list.appendChild(row);
-    });
-  } catch (e) {
-    $("otpStatus").textContent = "信任裝置讀取失敗，請稍後再試。";
-  }
-}
-
-$("untrustThisBtn").addEventListener("click", async () => {
-  const msg = $("securityMsg");
-  const r = await fetch("/api/auth/untrust-this", { method: "POST" });
-  if (r.status === 401) { showLogin(); return; }
-  msg.textContent = "已取消信任此設備，下次打開要重新輸動態碼。";
-  await loadDevices();
-});
-
+// ---- 設定：修改密碼 ----
 $("logoutBtn").addEventListener("click", async () => {
   await fetch("/api/auth/logout", { method: "POST" });
   showLogin();
 });
 
-$("replaceOtpBtn").addEventListener("click", () => {
-  $("replaceBox").classList.remove("hidden");
-  $("replaceMsg").textContent = "";
-  $("replaceCode").value = "";
-  $("replaceCode").focus();
-});
-
-$("replaceConfirmBtn").addEventListener("click", async () => {
-  const code = readCode($("replaceCode"));
-  const msg = $("replaceMsg");
-  if (!/^\d{6}$/.test(code)) {
-    msg.textContent = "請輸入目前驗證器上的 6 位數字。";
+$("changePassBtn").addEventListener("click", async () => {
+  const current = $("currentPass").value;
+  const next = $("newPass").value;
+  const confirm = $("confirmPass").value;
+  const msg = $("securityMsg");
+  if (!current || !next || !confirm) {
+    msg.textContent = "三個密碼框都要填。";
     return;
   }
-  msg.textContent = "驗證中……";
-  const r = await fetch("/api/auth/replace", {
+  if (next !== confirm) {
+    msg.textContent = "兩次新密碼輸入的不一樣，請重新輸入。";
+    return;
+  }
+  msg.textContent = "保存中……";
+  const r = await fetch("/api/auth/change-password", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ current_password: current, new_password: next }),
   });
+  if (r.status === 401) { showLogin(); return; }
   const data = await r.json();
   if (r.ok && data.ok) {
-    $("replaceBox").classList.add("hidden");
-    $("securityMsg").textContent = "舊驗證器已作廢，請掃新的二維碼重新綁定。";
-    await showSetup();
+    $("currentPass").value = "";
+    $("newPass").value = "";
+    $("confirmPass").value = "";
+    msg.textContent = "密碼已改好，請用新密碼重新登入。";
+    showLogin();
   } else {
-    msg.textContent = "更換失敗：" + (data.error || "請稍後再試。");
+    msg.textContent = "改密碼失敗：" + (data.error || "請稍後再試。");
   }
 });
 

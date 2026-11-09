@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 """Qwen 生圖工作台後端：FastAPI + SQLite + 後台執行緒調 Kaggle API。
 
-只依賴 fastapi / uvicorn / pyotp / qrcode[pil]，其餘全是標準庫
-（sqlite3、urllib、json、threading、hmac）。
+只依賴 fastapi / uvicorn，其餘全是標準庫
+（sqlite3、urllib、json、threading、hmac、hashlib）。
 流程（已在 Kaggle T4 x2 上跑通過，v4 COMPLETE）：
   前端提交提示詞 -> 後端把提示詞注入核心腳本模板 -> SaveKernel 提交新版本
   -> 每 60 秒查狀態 -> COMPLETE 後下載 PNG + test_summary.json -> 任務完成。
 金鑰只存在 /data/settings.json（權限 600）或環境變數，絕不寫進日誌、
 絕不回傳給前端。401 一律只回「金鑰無效或過期，請在設定頁重新填寫」。
-安全驗證：TOTP 動態碼（pyotp），沒有帳號密碼；驗證器密鑰與信任憑證的
-HMAC 密鑰存在 /data/auth.json（權限 600）。勾選「信任此設備 30 天」後，
-後端發 HMAC 簽名的信任憑證並把信任記錄存進 trusted_devices 表，30 天內
-同一設備免輸動態碼；隨時可以在設定頁逐個撤銷。
+登入：帳號密碼。帳號密碼的雜湊存在 /data/auth.json（權限 600），密碼
+本身絕不存明文、絕不寫進日誌。登入後發 24 小時 HMAC 簽名的登入憑證
+（cookie）；改密碼會換簽名密鑰，舊憑證立刻失效，要重新登入。
+預設帳號 anyong、預設密碼 admin，登入後請到設定頁改掉。
 """
 import base64
 import hashlib
 import hmac
 import json
 import os
-import re
 import secrets
 import sqlite3
 import threading
@@ -34,10 +33,8 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 
-import pyotp
-import qrcode
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 BASE_URL = "https://www.kaggle.com/api/v1"
@@ -49,11 +46,9 @@ POLL_INTERVAL_SECONDS = 60
 MAX_WAIT_SECONDS = 2 * 3600
 START_TIME = time.time()
 
-# OTP：動態碼 6 位；登入憑證 24 小時；信任此設備 30 天。
+# 登入憑證 24 小時。
 SESSION_TTL_SECONDS = 24 * 3600
-TRUST_TTL_SECONDS = 30 * 24 * 3600
 SESSION_COOKIE = "qwen_session"
-TRUST_COOKIE = "qwen_trust"
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "jobs.db"
@@ -109,9 +104,18 @@ def save_settings(username, key):
         pass
 
 
-# ---------------------------------------------------------------- OTP 認證
-# 只有動態碼，沒有帳號密碼。驗證器密鑰與信任憑證的 HMAC 密鑰存在
-# /data/auth.json（權限 600）；動態碼與密鑰值絕不寫進日誌。
+# ---------------------------------------------------------------- 帳號密碼登入
+# 帳號密碼存在 /data/auth.json（權限 600），格式：
+#   {"version": 2, "username": "anyong", "password_hash": "...",
+#    "salt": "...", "session_secret": "..."}
+# 密碼絕不存明文：PBKDF2-HMAC-SHA256，200000 次，鹽 16 位元組。
+# 密碼值絕不寫進日誌。改密碼時換 session_secret，舊登入憑證立刻失效。
+DEFAULT_USERNAME = "anyong"
+DEFAULT_PASSWORD = "admin"
+PBKDF2_ITERATIONS = 200000
+MIN_PASSWORD_LENGTH = 4
+
+
 def _write_json_600(path, data):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -125,20 +129,33 @@ def _write_json_600(path, data):
         pass
 
 
+def _hash_password(password, salt_hex):
+    """PBKDF2-HMAC-SHA256，200000 次，回傳雜湊的 hex。"""
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"),
+        bytes.fromhex(salt_hex), PBKDF2_ITERATIONS).hex()
+
+
 def load_auth():
-    """讀 /data/auth.json；沒有就生成一組（未綁定）。"""
+    """讀 /data/auth.json；沒有、損壞、或是舊版 OTP 格式（有 totp_secret），
+    就初始化成預設帳號 anyong、密碼 admin。"""
     try:
         if AUTH_PATH.exists():
             with open(AUTH_PATH, encoding="utf-8") as f:
                 saved = json.load(f)
-            if saved.get("totp_secret") and saved.get("hmac_key"):
-                return {"totp_secret": saved["totp_secret"],
-                        "hmac_key": saved["hmac_key"],
-                        "bound": bool(saved.get("bound"))}
+            if (saved.get("version") == 2 and saved.get("username")
+                    and saved.get("password_hash") and saved.get("salt")
+                    and saved.get("session_secret")):
+                return {"version": 2, "username": saved["username"],
+                        "password_hash": saved["password_hash"],
+                        "salt": saved["salt"],
+                        "session_secret": saved["session_secret"]}
     except Exception:
         pass
-    auth = {"totp_secret": pyotp.random_base32(),
-            "hmac_key": secrets.token_hex(32), "bound": False}
+    salt = secrets.token_hex(16)
+    auth = {"version": 2, "username": DEFAULT_USERNAME,
+            "password_hash": _hash_password(DEFAULT_PASSWORD, salt),
+            "salt": salt, "session_secret": secrets.token_hex(32)}
     _write_json_600(AUTH_PATH, auth)
     return auth
 
@@ -147,41 +164,38 @@ def save_auth(auth):
     _write_json_600(AUTH_PATH, auth)
 
 
-def _totp(auth):
-    return pyotp.TOTP(auth["totp_secret"])
-
-
-def _check_code(auth, code):
-    """驗 6 位動態碼。前後各容許一個 30 秒時段（時鐘有一點誤差也能過）。"""
-    if not isinstance(code, str):
+def _verify_password(auth, password):
+    """驗密碼：雜湊比對，時間固定，比對失敗不透露是哪一項錯。"""
+    if not isinstance(password, str) or not password:
         return False
-    code = code.strip().replace(" ", "")
-    if not re.fullmatch(r"\d{6}", code):
+    try:
+        expect = _hash_password(password, auth["salt"])
+    except Exception:
         return False
-    return bool(_totp(auth).verify(code, valid_window=1))
+    return hmac.compare_digest(expect, auth["password_hash"])
 
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
-def _sign_token(auth, kind, device_id, exp):
-    """發一個 HMAC 簽名的憑證：payload.簽名。kind 是 session 或 trust。"""
+def _sign_token(auth, exp):
+    """發一個 HMAC 簽名的登入憑證：payload.簽名。只簽 session 一種。"""
     payload = json.dumps(
-        {"t": kind, "did": device_id, "exp": int(exp)},
+        {"t": "session", "exp": int(exp)},
         separators=(",", ":")).encode("utf-8")
     payload_b64 = _b64url(payload)
-    sig = hmac.new(auth["hmac_key"].encode("ascii"),
+    sig = hmac.new(auth["session_secret"].encode("ascii"),
                    payload_b64.encode("ascii"),
                    hashlib.sha256).digest()
     return payload_b64 + "." + _b64url(sig)
 
 
-def _verify_token(auth, token, kind):
-    """驗憑證：簽名對得上、種類對、沒過期，才回 payload，否則回 None。"""
+def _verify_token(auth, token):
+    """驗登入憑證：簽名對得上、種類對、沒過期，才回 payload，否則回 None。"""
     try:
         payload_b64, sig_b64 = token.split(".", 1)
-        expect = hmac.new(auth["hmac_key"].encode("ascii"),
+        expect = hmac.new(auth["session_secret"].encode("ascii"),
                           payload_b64.encode("ascii"),
                           hashlib.sha256).digest()
         if not hmac.compare_digest(_b64url(expect), sig_b64):
@@ -189,7 +203,7 @@ def _verify_token(auth, token, kind):
         pad = "=" * (-len(payload_b64) % 4)
         payload = json.loads(
             base64.urlsafe_b64decode(payload_b64 + pad).decode("utf-8"))
-        if payload.get("t") != kind:
+        if payload.get("t") != "session":
             return None
         if int(payload.get("exp", 0)) <= int(time.time()):
             return None
@@ -198,82 +212,31 @@ def _verify_token(auth, token, kind):
         return None
 
 
-def _device_display_name(user_agent):
-    """從 User-Agent 粗略拼一個裝置名，信任列表上看得懂就好。"""
-    ua = user_agent or ""
-    if "Android" in ua:
-        system = "Android"
-    elif "iPhone" in ua or "iPad" in ua:
-        system = "iPhone/iPad"
-    elif "Windows" in ua:
-        system = "Windows"
-    elif "Macintosh" in ua:
-        system = "macOS"
-    elif "Linux" in ua:
-        system = "Linux"
-    else:
-        system = "未知裝置"
-    if "Edg/" in ua:
-        browser = "Edge"
-    elif "Chrome/" in ua:
-        browser = "Chrome"
-    elif "Firefox/" in ua:
-        browser = "Firefox"
-    elif "Safari/" in ua:
-        browser = "Safari"
-    else:
-        browser = "瀏覽器"
-    return f"{browser} · {system}"
-
-
-def _set_auth_cookies(resp, auth, request, trust_device):
-    """發登入憑證（24 小時）。勾了信任此設備再發 30 天信任憑證並登記。"""
+def _set_session_cookie(resp, auth):
+    """發登入憑證（24 小時）。"""
     session_exp = int(time.time()) + SESSION_TTL_SECONDS
     resp.set_cookie(SESSION_COOKIE,
-                    _sign_token(auth, "session", "login", session_exp),
+                    _sign_token(auth, session_exp),
                     max_age=SESSION_TTL_SECONDS, httponly=True,
                     samesite="lax", path="/")
-    if trust_device:
-        device_id = uuid.uuid4().hex[:16]
-        trust_exp = int(time.time()) + TRUST_TTL_SECONDS
-        add_trusted_device(
-            device_id,
-            _device_display_name(request.headers.get("user-agent", "")),
-            _now(), datetime.fromtimestamp(trust_exp, timezone.utc).isoformat())
-        resp.set_cookie(TRUST_COOKIE,
-                        _sign_token(auth, "trust", device_id, trust_exp),
-                        max_age=TRUST_TTL_SECONDS, httponly=True,
-                        samesite="lax", path="/")
     return resp
 
 
 def _clear_auth_cookies(resp):
     resp.delete_cookie(SESSION_COOKIE, path="/")
-    resp.delete_cookie(TRUST_COOKIE, path="/")
     return resp
 
 
 def _auth_state(request):
-    """回 (bound, authenticated, trusted, trust_device_id)。
-    登入憑證或有效的信任憑證任一通過就算已登入。"""
+    """回 (authenticated, username)。只認 24 小時登入憑證。"""
     auth = load_auth()
-    bound = auth["bound"]
-    session = _verify_token(auth, request.cookies.get(SESSION_COOKIE, ""), "session")
-    if session:
-        trust = _verify_token(auth, request.cookies.get(TRUST_COOKIE, ""), "trust")
-        trust_did = trust["did"] if trust else None
-        return bound, True, bool(trust), trust_did
-    trust = _verify_token(auth, request.cookies.get(TRUST_COOKIE, ""), "trust")
-    if trust and get_trusted_device(trust["did"]):
-        return bound, True, True, trust["did"]
-    return bound, False, False, None
+    if _verify_token(auth, request.cookies.get(SESSION_COOKIE, "")):
+        return True, auth["username"]
+    return False, ""
 
 
 def _require_auth(request):
-    bound, authenticated, _, _ = _auth_state(request)
-    if not bound:
-        return JSONResponse({"error": "尚未綁定驗證器，請先掃碼綁定"},
-                            status_code=401)
+    authenticated, _ = _auth_state(request)
     if not authenticated:
         return JSONResponse({"error": NOT_LOGGED_IN_TEXT}, status_code=401)
     return None
@@ -373,64 +336,6 @@ def init_db():
             generation_seconds REAL,
             error TEXT,
             kernel_version INTEGER)""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS trusted_devices (
-            id TEXT PRIMARY KEY,
-            device_name TEXT,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL)""")
-        conn.commit()
-        conn.close()
-
-
-def add_trusted_device(device_id, device_name, created_at, expires_at):
-    with DB_LOCK:
-        conn = _conn()
-        conn.execute("INSERT INTO trusted_devices (id, device_name, created_at, "
-                     "expires_at) VALUES (?, ?, ?, ?)",
-                     (device_id, device_name, created_at, expires_at))
-        conn.commit()
-        conn.close()
-
-
-def list_trusted_devices():
-    with DB_LOCK:
-        conn = _conn()
-        rows = conn.execute(
-            "SELECT * FROM trusted_devices ORDER BY created_at DESC").fetchall()
-        conn.close()
-    return [{"id": r["id"], "device_name": r["device_name"],
-             "created_at": r["created_at"],
-             "expires_at": r["expires_at"]} for r in rows]
-
-
-def get_trusted_device(device_id):
-    with DB_LOCK:
-        conn = _conn()
-        row = conn.execute("SELECT * FROM trusted_devices WHERE id = ?",
-                           (device_id,)).fetchone()
-        conn.close()
-    if not row:
-        return None
-    if row["expires_at"] <= _now():
-        return None
-    return {"id": row["id"], "device_name": row["device_name"],
-            "created_at": row["created_at"], "expires_at": row["expires_at"]}
-
-
-def revoke_trusted_device(device_id):
-    with DB_LOCK:
-        conn = _conn()
-        cur = conn.execute("DELETE FROM trusted_devices WHERE id = ?",
-                           (device_id,))
-        conn.commit()
-        conn.close()
-    return cur.rowcount > 0
-
-
-def revoke_all_trusted_devices():
-    with DB_LOCK:
-        conn = _conn()
-        conn.execute("DELETE FROM trusted_devices")
         conn.commit()
         conn.close()
 
@@ -713,84 +618,29 @@ def health():
     return {"ok": True}
 
 
-# ---------------------------------------------------------------- OTP 端點
+# ---------------------------------------------------------------- 帳號密碼端點
 @app.get("/api/auth/status")
 def auth_status(request: Request):
-    bound, authenticated, trusted, _ = _auth_state(request)
-    return {"bound": bound, "authenticated": authenticated,
-            "trusted": trusted}
-
-
-@app.post("/api/auth/setup")
-def auth_setup():
-    """未綁定時用：回傳 otpauth URL 與密鑰文本（前端顯示二維碼與手動輸入用）。
-    已綁定就拒絕，要換驗證器走 /api/auth/replace。"""
-    auth = load_auth()
-    if auth["bound"]:
-        return JSONResponse({"error": "已經綁定驗證器了，要換請走更換流程"},
-                            status_code=403)
-    totp = _totp(auth)
-    return {"otpauth_url": totp.provisioning_uri(
-        name="Qwen生圖工作台", issuer_name="Qwen生圖工作台"),
-        "secret": auth["totp_secret"]}
-
-
-@app.get("/api/auth/qr")
-def auth_qr():
-    """未綁定時用：把 otpauth URL 畫成二維碼 PNG 回給前端顯示。"""
-    auth = load_auth()
-    if auth["bound"]:
-        return JSONResponse({"error": "已經綁定驗證器了"}, status_code=403)
-    totp = _totp(auth)
-    url = totp.provisioning_uri(
-        name="Qwen生圖工作台", issuer_name="Qwen生圖工作台")
-    qr = qrcode.QRCode(border=2)
-    qr.add_data(url)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    return Response(content=buf.getvalue(), media_type="image/png")
-
-
-@app.post("/api/auth/bind")
-async def auth_bind(request: Request):
-    """第一次綁定：驗動態碼，對了才算綁定成功，同時發登入憑證。"""
-    auth = load_auth()
-    if auth["bound"]:
-        return JSONResponse({"error": "已經綁定過了，請直接登入"},
-                            status_code=403)
-    try:
-        data = await request.json()
-    except Exception:
-        return JSONResponse({"error": "請求內容不是合法的 JSON"}, status_code=400)
-    if not isinstance(data, dict) or not _check_code(auth, data.get("code", "")):
-        return JSONResponse({"error": "動態碼不對，請看驗證器上的 6 位數字再試"},
-                            status_code=400)
-    auth["bound"] = True
-    save_auth(auth)
-    resp = JSONResponse({"ok": True})
-    return _set_auth_cookies(resp, auth, request,
-                             bool(data.get("trust_device")))
+    authenticated, username = _auth_state(request)
+    return {"authenticated": authenticated, "username": username}
 
 
 @app.post("/api/auth/login")
 async def auth_login(request: Request):
-    """已綁定時登入：驗動態碼，發登入憑證；勾信任此設備再發 30 天憑證。"""
-    auth = load_auth()
-    if not auth["bound"]:
-        return JSONResponse({"error": "尚未綁定驗證器，請先掃碼綁定"},
-                            status_code=400)
+    """帳號密碼登入：對了發 24 小時登入憑證；不對只回「帳號或密碼不對」。"""
     try:
         data = await request.json()
     except Exception:
         return JSONResponse({"error": "請求內容不是合法的 JSON"}, status_code=400)
-    if not isinstance(data, dict) or not _check_code(auth, data.get("code", "")):
-        return JSONResponse({"error": "動態碼不對，請看驗證器上的 6 位數字再試"},
-                            status_code=400)
-    resp = JSONResponse({"ok": True})
-    return _set_auth_cookies(resp, auth, request,
-                             bool(data.get("trust_device")))
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "帳號或密碼不對"}, status_code=400)
+    username = str(data.get("username") or "").strip()
+    password = data.get("password") or ""
+    auth = load_auth()
+    if username != auth["username"] or not _verify_password(auth, password):
+        return JSONResponse({"error": "帳號或密碼不對"}, status_code=400)
+    resp = JSONResponse({"ok": True, "username": auth["username"]})
+    return _set_session_cookie(resp, auth)
 
 
 @app.post("/api/auth/logout")
@@ -799,68 +649,34 @@ def auth_logout():
     return _clear_auth_cookies(resp)
 
 
-@app.get("/api/auth/devices")
-def auth_devices(request: Request):
-    bound, authenticated, _, current_did = _auth_state(request)
-    if not authenticated:
-        return JSONResponse({"error": NOT_LOGGED_IN_TEXT}, status_code=401)
-    devices = list_trusted_devices()
-    for d in devices:
-        d["current"] = (d["id"] == current_did)
-    return {"devices": devices}
-
-
-@app.post("/api/auth/devices/{device_id}/revoke")
-def auth_revoke_device(device_id: str, request: Request):
-    bound, authenticated, _, current_did = _auth_state(request)
-    if not authenticated:
-        return JSONResponse({"error": NOT_LOGGED_IN_TEXT}, status_code=401)
-    revoke_trusted_device(device_id)
-    resp = JSONResponse({"ok": True})
-    if device_id == current_did:
-        resp.delete_cookie(TRUST_COOKIE, path="/")
-    return resp
-
-
-@app.post("/api/auth/untrust-this")
-def auth_untrust_this(request: Request):
-    bound, authenticated, _, current_did = _auth_state(request)
-    if not authenticated:
-        return JSONResponse({"error": NOT_LOGGED_IN_TEXT}, status_code=401)
-    if current_did:
-        revoke_trusted_device(current_did)
-    resp = JSONResponse({"ok": True})
-    resp.delete_cookie(TRUST_COOKIE, path="/")
-    return resp
-
-
-@app.post("/api/auth/replace")
-async def auth_replace(request: Request):
-    """更換驗證器：先輸當前動態碼證明是你本人，通過後產生新密鑰、舊綁定作廢、
-    全部信任裝置撤銷，並登出（回前端顯示新的掃碼設定頁）。"""
-    auth = load_auth()
-    if not auth["bound"]:
-        return JSONResponse({"error": "尚未綁定驗證器"}, status_code=400)
-    bound, authenticated, _, _ = _auth_state(request)
+@app.post("/api/auth/change-password")
+async def auth_change_password(request: Request):
+    """改密碼：必須已登入；先驗目前的密碼，再驗新密碼至少 4 位。
+    成功後換新鹽、新雜湊、新 session_secret，舊登入憑證立刻失效，
+    回前端請使用者用新密碼重新登入。"""
+    authenticated, _ = _auth_state(request)
     if not authenticated:
         return JSONResponse({"error": NOT_LOGGED_IN_TEXT}, status_code=401)
     try:
         data = await request.json()
     except Exception:
         return JSONResponse({"error": "請求內容不是合法的 JSON"}, status_code=400)
-    if not isinstance(data, dict) or not _check_code(auth, data.get("code", "")):
-        return JSONResponse({"error": "動態碼不對，請看驗證器上的 6 位數字再試"},
-                            status_code=400)
-    new_auth = {"totp_secret": pyotp.random_base32(),
-                "hmac_key": auth["hmac_key"], "bound": False}
-    save_auth(new_auth)
-    revoke_all_trusted_devices()
-    totp = _totp(new_auth)
-    resp = JSONResponse({
-        "ok": True,
-        "otpauth_url": totp.provisioning_uri(
-            name="Qwen生圖工作台", issuer_name="Qwen生圖工作台"),
-        "secret": new_auth["totp_secret"]})
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "請求內容不是合法的 JSON"}, status_code=400)
+    current = data.get("current_password") or ""
+    new = data.get("new_password") or ""
+    auth = load_auth()
+    if not _verify_password(auth, current):
+        return JSONResponse({"error": "目前的密碼不對"}, status_code=400)
+    if len(new) < MIN_PASSWORD_LENGTH:
+        return JSONResponse(
+            {"error": f"新密碼至少要 {MIN_PASSWORD_LENGTH} 位"}, status_code=400)
+    salt = secrets.token_hex(16)
+    auth["password_hash"] = _hash_password(new, salt)
+    auth["salt"] = salt
+    auth["session_secret"] = secrets.token_hex(32)
+    save_auth(auth)
+    resp = JSONResponse({"ok": True})
     return _clear_auth_cookies(resp)
 
 
@@ -1034,6 +850,14 @@ def test_settings():
         return {"ok": False, "error": KEY_ERROR_TEXT}
     except KaggleError as e:
         return {"ok": False, "error": str(e)[:200]}
+
+
+@app.api_route("/api/{rest:path}",
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+def api_unknown(rest: str):
+    """未知的 /api/* 路徑：一律回 JSON 404，不掉進靜態檔案處理
+    （靜態檔案只認 GET，POST 會回 405，容易誤會接口還在）。"""
+    return JSONResponse({"error": "找不到這個接口"}, status_code=404)
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

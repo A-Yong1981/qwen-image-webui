@@ -10,28 +10,14 @@
 <div id="authScreen" class="auth-screen hidden">
   <div class="auth-box">
     <h1>Qwen 生圖工作台</h1>
-
-    <div id="authSetup" class="hidden">
-      <h2>第一次使用：綁定驗證器</h2>
-      <p class="note">用手機上的驗證器 App（Google Authenticator 或 Microsoft Authenticator）掃下面的二維碼；不能掃碼就手動輸入密鑰。然後輸入 App 上顯示的 6 位動態碼，點綁定。</p>
-      <img id="setupQr" class="qr" alt="驗證器二維碼">
-      <p class="note">密鑰（手動輸入用）：<code id="setupSecret"></code></p>
-      <label for="setupCode">6 位動態碼</label>
-      <input id="setupCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="例如：123456">
-      <label class="check"><input id="setupTrust" type="checkbox" checked> 信任此設備 30 天（這台裝置 30 天內不用再輸碼）</label>
-      <button id="bindBtn" class="primary">綁定並登入</button>
-      <p id="setupMsg" class="msg"></p>
-    </div>
-
-    <div id="authLogin" class="hidden">
-      <h2>請輸入動態碼登入</h2>
-      <p class="note">打開手機上的驗證器 App，看 Qwen 生圖工作台那一行的 6 位數字。</p>
-      <label for="loginCode">6 位動態碼</label>
-      <input id="loginCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="例如：123456">
-      <label class="check"><input id="loginTrust" type="checkbox" checked> 信任此設備 30 天（這台裝置 30 天內不用再輸碼）</label>
-      <button id="loginBtn" class="primary">登入</button>
-      <p id="loginMsg" class="msg"></p>
-    </div>
+    <h2>請登入</h2>
+    <p class="note">輸入帳號和密碼才能使用。預設帳號 anyong，預設密碼 admin，登入後請到設定頁把密碼改掉。</p>
+    <label for="loginUser">帳號</label>
+    <input id="loginUser" type="text" autocomplete="username" value="anyong">
+    <label for="loginPass">密碼</label>
+    <input id="loginPass" type="password" autocomplete="current-password" placeholder="請輸入密碼">
+    <button id="loginBtn" class="primary">登入</button>
+    <p id="loginMsg" class="msg"></p>
   </div>
 </div>
 
@@ -116,22 +102,19 @@
     <h3>額度</h3>
     <p id="quotaText" class="note">讀取中……</p>
 
-    <h3>安全驗證</h3>
-    <p id="otpStatus" class="note">讀取中……</p>
-    <div id="trustedDevices" class="devices"></div>
+    <h3>修改密碼</h3>
+    <p class="note">改完密碼後要重新登入一次。</p>
+    <label for="currentPass">目前的密碼</label>
+    <input id="currentPass" type="password" autocomplete="current-password" placeholder="請輸入目前的密碼">
+    <label for="newPass">新密碼</label>
+    <input id="newPass" type="password" autocomplete="new-password" placeholder="至少 4 位">
+    <label for="confirmPass">再輸一次新密碼</label>
+    <input id="confirmPass" type="password" autocomplete="new-password" placeholder="再輸一次新密碼">
     <div class="row">
-      <button id="untrustThisBtn">取消信任此設備</button>
-      <button id="replaceOtpBtn">更換驗證器</button>
+      <button id="changePassBtn" class="primary">保存新密碼</button>
       <button id="logoutBtn">登出</button>
     </div>
     <p id="securityMsg" class="msg"></p>
-    <div id="replaceBox" class="hidden">
-      <p class="note">更換驗證器要先證明是你本人：輸入目前驗證器 App 上的 6 位動態碼，通過後會顯示新的二維碼，舊的驗證器就作廢了，全部信任裝置也會一併撤銷。</p>
-      <label for="replaceCode">目前的 6 位動態碼</label>
-      <input id="replaceCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="例如：123456">
-      <button id="replaceConfirmBtn" class="primary">確認更換</button>
-      <p id="replaceMsg" class="msg"></p>
-    </div>
   </section>
 </main>
 
