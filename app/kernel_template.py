@@ -35,6 +35,14 @@ v2.5: 數據集模式——內核提交時掛上 Kaggle 數據集
 不用再下載 14.23GB。ComfyUI 用 extra_model_paths.yaml 指到掛載
 目錄（官方機制），工作流本身一個節點都不用改；沒配數據集的
 伺服器走老路（下載）。掛載路徑不寫死，按檔名遞迴找。
+v2.6: 數據集模式改成先拷到本地磁碟再讀。v2.5 讓 ComfyUI 直接從掛載
+目錄讀模型，兩次真跑（參考圖 12:48、純文字 13:25）都在讀入 VAE 與
+8B 文本編碼器後卡住，20 分鐘沒開始採樣、超時失敗；純文字 v4（模型
+下載到本地磁碟）是 80 秒跑通的。掛載直讀大檔（尤其 GGUF 的 mmap、
+9.35GB 編碼器）會卡住，所以先用 shutil.copyfile 順序拷 3 個檔到
+/kaggle/tmp/models/ 再讀——順序讀是 FUSE 最友善的讀法，拷完走本地
+磁碟，跟 v4 同一條路；拷貝耗時記在 test_summary.json 的
+dataset_copy_seconds 裡，files_downloaded_bytes 仍是 0。
 """
 import glob
 import json
@@ -200,6 +208,8 @@ def build_workflow(opts, prompt):
 # 數據集模式用的小工具（v2.5）。放在這裡是為了讓測試能單獨抽出來測，
 # 不要把這些邏輯寫進第 3 步的主流程裡。
 DATASET_SEARCH_ROOT = "/kaggle/input"
+# v2.6：數據集模式先把模型檔拷到的本地目錄（scratch，每次跑都重拷）。
+LOCAL_MODELS_DIR = "/kaggle/tmp/models"
 
 
 def find_dataset_file(name, expected_size, root=DATASET_SEARCH_ROOT):
@@ -232,6 +242,29 @@ def write_extra_model_paths(comfy_root, category_paths):
     with open(yaml_path, "w") as f:
         f.write("\n".join(lines) + "\n")
     return yaml_path
+
+
+def copy_dataset_file(src, expected_size, dest_dir=LOCAL_MODELS_DIR):
+    """把掛載目錄裡的一個模型檔順序拷到本地磁碟（v2.6）。
+    shutil.copyfile 是順序讀，FUSE 掛載最友善的讀法；掛載直讀大檔
+    （尤其 GGUF 的 mmap、9.35GB 編碼器）會讓 ComfyUI 卡住，兩次真跑
+    都是這樣 20 分鐘超時。拷完立即核對大小，不對就直接報錯停掉，
+    不要默默用壞檔。回傳本地路徑。"""
+    os.makedirs(dest_dir, exist_ok=True)
+    dest = os.path.join(dest_dir, os.path.basename(src))
+    t0 = time.time()
+    shutil.copyfile(src, dest)
+    secs = time.time() - t0
+    got = os.path.getsize(dest)
+    if got != expected_size:
+        raise SystemExit(
+            f"DATASET COPY SIZE MISMATCH {os.path.basename(src)}："
+            f"got {got}，expected {expected_size}")
+    mb = got / (1024 * 1024)
+    rate = mb / secs if secs > 0 else 0.0
+    log(f"dataset copy: {os.path.basename(src)} {got} bytes "
+        f"in {secs:.1f}s ({rate:.1f} MB/s) -> {dest}")
+    return dest
 
 
 # 1. Hardware check (v2: tolerant). Print the real GPU, RAM, disk.
@@ -317,11 +350,23 @@ if USE_DATASET:
         with open(found[category], "rb") as f:
             f.read(1024 * 1024)
     dataset_info["dataset_first_read_seconds"] = round(time.time() - t_read, 1)
-    yaml_path = write_extra_model_paths(COMFY, found)
+    # v2.6：掛載直讀會卡住——兩次真跑（參考圖 12:48、純文字 13:25）
+    # 都在 ComfyUI 讀入 VAE 與 8B 文本編碼器後卡住，20 分鐘沒開始
+    # 採樣；純文字 v4（模型下載到本地磁碟）是 80 秒跑通的。所以先把
+    # 3 個檔順序拷到本地磁碟再讀：順序讀是 FUSE 最友善的讀法，拷完
+    # 走本地磁碟，跟 v4 同一條路。拷貝時間記在 dataset_info 裡。
+    t_copy = time.time()
+    local_paths = {}
+    for name, expected, category in DATASET_FILES:
+        local_paths[category] = copy_dataset_file(found[category], expected)
+    dataset_info["dataset_copy_seconds"] = round(time.time() - t_copy, 1)
+    dataset_info["dataset_copy_bytes"] = 14225873072
+    yaml_path = write_extra_model_paths(COMFY, local_paths)
     dataset_info["dataset_bytes"] = 14225873072
     log(f"dataset ready: locate {dataset_info['dataset_locate_seconds']}s + "
-        f"first-read {dataset_info['dataset_first_read_seconds']}s; "
-        f"extra_model_paths.yaml -> {yaml_path}")
+        f"first-read {dataset_info['dataset_first_read_seconds']}s + "
+        f"copy {dataset_info['dataset_copy_seconds']}s; "
+        f"extra_model_paths.yaml -> {yaml_path} (local disk)")
 else:
     FILES = [
         ("https://huggingface.co/unsloth/Qwen-Image-2.1-GGUF/resolve/main/qwen-image-2.1-Q4_K_M.gguf",
@@ -456,7 +501,8 @@ try:
     }
     # 數據集模式的耗時也寫進去，第一次真跑時就能量出到底省了多少：
     # dataset_locate_seconds（找檔）、dataset_first_read_seconds
-    # （首次讀 1MB 探針）、files_downloaded_bytes（數據集模式是 0）。
+    # （首次讀 1MB 探針）、dataset_copy_seconds（拷到本地磁碟的秒數，
+    # v2.6 新增）、files_downloaded_bytes（數據集模式是 0）。
     summary.update(dataset_info)
     with open(os.path.join(WORK, "test_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
