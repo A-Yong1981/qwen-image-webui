@@ -572,6 +572,31 @@ def update_job(job_id, **fields):
         conn.close()
 
 
+def get_job_status(job_id):
+    """只讀一個任務的狀態（取消檢查用）。"""
+    with DB_LOCK:
+        conn = _conn()
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        conn.close()
+    return row["status"] if row else None
+
+
+def try_start_job(job_id, version):
+    """把任務從 queued 改成 running，只在它還是 queued 時才改。
+    回傳 True 表示改成功（可以繼續跑）；False 表示它剛被取消了。"""
+    with DB_LOCK:
+        conn = _conn()
+        cur = conn.execute(
+            "UPDATE jobs SET status = 'running', kernel_version = ? "
+            "WHERE id = ? AND status = 'queued'",
+            (version, job_id))
+        conn.commit()
+        changed = cur.rowcount
+        conn.close()
+    return changed > 0
+
+
 def fail_job(job_id, error):
     update_job(job_id, status="failed", finished_at=_now(), error=error[:500])
 
@@ -792,6 +817,9 @@ def run_job(job):
     credentials = {"username": server["username"], "key": server["key"]}
     try:
         script = build_kernel_script(job["prompt"], job.get("options"))
+        # 排隊時被取消就直接停，不要提交到 Kaggle。
+        if get_job_status(job_id) != "queued":
+            return
         body = {
             "slug": kernel_ref,
             "newTitle": KERNEL_SLUG,
@@ -814,11 +842,17 @@ def run_job(job):
         resp = kaggle_post(credentials, "/kernels.KernelsApiService/SaveKernel",
                            body, timeout=120)
         version = resp.get("versionNumber") if isinstance(resp, dict) else None
-        update_job(job_id, status="running", kernel_version=version)
+        # 只有還是 queued 才改成 running；改了 0 行就是剛被取消，直接停。
+        if not try_start_job(job_id, version):
+            return
         status = None
         deadline = time.time() + MAX_WAIT_SECONDS
         while time.time() < deadline:
             time.sleep(POLL_INTERVAL_SECONDS)
+            # 輪詢時被取消就直接停：不要標成失敗，也不要去下載輸出。
+            # Kaggle 內核本身會自己超時，與工作台無關。
+            if get_job_status(job_id) == "cancelled":
+                return
             st = kaggle_post(
                 credentials, "/kernels.KernelsApiService/GetKernelSessionStatus",
                 {"userName": kernel_owner, "kernelSlug": KERNEL_SLUG}, timeout=60)
@@ -1149,6 +1183,32 @@ def _delete_job_files(job_id):
         pass
 
 
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job_endpoint(job_id: str):
+    """取消一個排隊中或進行中的任務。
+    工作台不再等它、不再跑它；已經在 Kaggle 上跑的內核本身
+    會跑到它自己的超時才停（Kaggle 沒有停止內核的 API），
+    介面上的文字要誠實寫清楚這一點。"""
+    with DB_LOCK:
+        conn = _conn()
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            conn.close()
+            return JSONResponse({"error": "找不到這個任務"}, status_code=404)
+        if row["status"] not in ("queued", "running"):
+            conn.close()
+            return JSONResponse({"error": "任務已結束，不能取消"},
+                                status_code=400)
+        conn.execute(
+            "UPDATE jobs SET status = 'cancelled', finished_at = ?, "
+            "error = '已取消' WHERE id = ?", (_now(), job_id))
+        conn.commit()
+        conn.close()
+    _delete_job_files(job_id)
+    return {"ok": True, "status": "cancelled"}
+
+
 @app.delete("/api/jobs/{job_id}")
 def delete_job_endpoint(job_id: str):
     """刪一條已結束的任務（資料庫記錄 + 圖片檔案）。
@@ -1173,15 +1233,17 @@ def delete_job_endpoint(job_id: str):
 @app.post("/api/jobs/clear")
 def clear_jobs_endpoint():
     """清空全部已結束的任務（資料庫記錄 + 圖片檔案），
-    排隊中或進行中的任務不動。"""
+    排隊中或進行中的任務不動。已取消的也算已結束，一起清。"""
     with DB_LOCK:
         conn = _conn()
         rows = conn.execute(
-            "SELECT id FROM jobs WHERE status IN ('completed', 'failed')"
+            "SELECT id FROM jobs WHERE status IN "
+            "('completed', 'failed', 'cancelled')"
             ).fetchall()
         ids = [r["id"] for r in rows]
         conn.execute(
-            "DELETE FROM jobs WHERE status IN ('completed', 'failed')")
+            "DELETE FROM jobs WHERE status IN "
+            "('completed', 'failed', 'cancelled')")
         conn.commit()
         conn.close()
     for job_id in ids:

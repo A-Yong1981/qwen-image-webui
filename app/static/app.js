@@ -5,6 +5,7 @@ const STATUS_TEXT = {
   running: "生成中",
   completed: "已完成",
   failed: "失敗",
+  cancelled: "已取消",
 };
 
 let configured = false;
@@ -753,7 +754,9 @@ function renderCurrentJob() {
         : job.status === "completed"
           ? `已完成，生圖本身用了 ${fmtSeconds(job.generation_seconds)}，` +
             `整個任務用了 ${fmtSeconds(job.gpu_seconds)}。`
-          : "";
+          : job.status === "cancelled"
+            ? "已取消，不會再執行。"
+            : "";
   const err = $("currentError");
   if (job.status === "failed") {
     err.textContent = "失敗原因：" + (job.error || "未知原因");
@@ -774,8 +777,12 @@ function renderCurrentJob() {
     img.classList.add("hidden");
     actions.classList.add("hidden");
   }
-  // 預覽區的刪除按鈕只對已完成的任務顯示。
-  $("detailDeleteBtn").style.display = job.status === "completed" ? "" : "none";
+  // 預覽區的刪除按鈕對已結束的任務顯示（已完成、失敗、已取消）。
+  $("detailDeleteBtn").style.display =
+    ["completed", "failed", "cancelled"].includes(job.status) ? "" : "none";
+  // 預覽區的取消按鈕只對排隊中或進行中的任務顯示。
+  $("cancelJobBtn").style.display =
+    job.status === "queued" || job.status === "running" ? "" : "none";
 }
 
 // ---- 歷史記錄 ----
@@ -804,7 +811,8 @@ function renderHistory() {
           ? `<p class="error">失敗原因：${escapeHtml(job.error)}</p>` : ""}
       </div>`;
     card.addEventListener("click", () => showPreview(job));
-    if (job.status === "completed" || job.status === "failed") {
+    if (job.status === "completed" || job.status === "failed" ||
+        job.status === "cancelled") {
       const del = document.createElement("button");
       del.type = "button";
       del.className = "job-delete btn-danger";
@@ -814,6 +822,17 @@ function renderHistory() {
         deleteJob(job);
       });
       card.appendChild(del);
+    }
+    if (job.status === "queued" || job.status === "running") {
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "job-delete btn-danger";
+      cancel.textContent = "取消";
+      cancel.addEventListener("click", (e) => {
+        e.stopPropagation();
+        cancelJob(job);
+      });
+      card.appendChild(cancel);
     }
     list.appendChild(card);
   });
@@ -844,6 +863,27 @@ async function deleteJob(job) {
   }
 }
 
+// ---- 歷史記錄 / 預覽區：取消 ----
+async function cancelJob(job) {
+  if (!job) return;
+  if (!window.confirm("確定要取消這個任務嗎？排隊中的任務取消後不會執行；進行中的任務取消後工作台不再等它（Kaggle 那邊可能還會跑一會才停）。")) return;
+  const msg = $("historyMsg");
+  try {
+    const r = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/cancel`,
+                          { method: "POST" });
+    if (r.status === 401) { showLogin(); return; }
+    const data = await r.json();
+    if (!r.ok) {
+      msg.textContent = "取消失敗：" + (data.error || "請稍後再試。");
+      return;
+    }
+    msg.textContent = "已取消。";
+    await refreshJobs();
+  } catch (e) {
+    msg.textContent = "取消失敗，請稍後再試。";
+  }
+}
+
 $("clearHistoryBtn").addEventListener("click", async () => {
   if (!window.confirm("確定清空全部已完成的歷史記錄嗎？進行中的任務不會動。")) return;
   const msg = $("historyMsg");
@@ -866,6 +906,10 @@ $("clearHistoryBtn").addEventListener("click", async () => {
 
 $("detailDeleteBtn").addEventListener("click", () => {
   if (displayedJob) deleteJob(displayedJob);
+});
+
+$("cancelJobBtn").addEventListener("click", () => {
+  if (displayedJob) cancelJob(displayedJob);
 });
 
 function showPreview(job) {
