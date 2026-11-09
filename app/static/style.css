@@ -1,26 +1,35 @@
-/* Qwen 生圖工作台：iOS 清新海地風格
-   淺色底、淡海水漸變、磨砂白卡片、海藍色點綴；不改任何元素 id 與功能。 */
+/* Qwen 生圖工作台：iOS 清新風格，生機盎然版
+   背景是春天嫩綠 → 薄荷 → 亮青 → 天空藍，右上角帶一點陽光暖調；
+   卡片保持白色磨砂，文字保證可讀；不改任何元素 id 與功能。
+   生圖頁一屏放下：整頁是 100vh 的 flex 欄（頁頭、頁籤、內容），
+   頁面本身不滾動；控制區、預覽區各自在內部滾動。
+   窄屏（手機）恢復上下疊、頁面滾動，見下方 @media (max-width: 900px)。 */
 * { box-sizing: border-box; }
+
+html, body { height: 100%; }
 
 body {
   margin: 0;
   font-family: -apple-system, "SF Pro", "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
-  background: linear-gradient(180deg, #EAF6F7 0%, #DFF0FA 55%, #E3F2F0 100%);
+  background:
+    radial-gradient(640px 320px at 88% -8%, rgba(255, 222, 130, 0.55), rgba(255, 222, 130, 0) 70%),
+    linear-gradient(160deg, #CFF7C9 0%, #A8EBC9 32%, #7FDCDD 62%, #7CC6F7 100%);
   background-attachment: fixed;
   color: #1F3D4D;
-  line-height: 1.6;
+  line-height: 1.55;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-/* 頂欄：iOS 導航欄式半透明磨砂白，捲動時吸在頂部。 */
+/* 頂欄：iOS 導航欄式半透明磨砂白，固定在頂部。 */
 header {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  background: rgba(255, 255, 255, 0.72);
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.78);
   -webkit-backdrop-filter: blur(18px) saturate(1.6);
   backdrop-filter: blur(18px) saturate(1.6);
-  border-bottom: 1px solid rgba(11, 111, 164, 0.10);
-  padding: 14px 16px;
+  border-bottom: 1px solid rgba(10, 138, 104, 0.12);
+  padding: 8px 16px;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -28,8 +37,8 @@ header {
 }
 
 .header-text { min-width: 0; }
-header h1 { margin: 0; font-size: 22px; font-weight: 700; color: #0B6FA4; letter-spacing: 0.2px; }
-header .sub { margin: 4px 0 0; color: #5B7E8F; font-size: 14px; }
+header h1 { margin: 0; font-size: 20px; font-weight: 700; color: #0A8A68; letter-spacing: 0.2px; }
+header .sub { margin: 4px 0 0; color: #4A7A6A; font-size: 14px; }
 
 /* 伺服器狀態：頁面右上角小膠囊，兩行小字；窄屏時自動換到標題下方。 */
 .header-status {
@@ -38,132 +47,226 @@ header .sub { margin: 4px 0 0; color: #5B7E8F; font-size: 14px; }
   text-align: right;
   font-size: 12px;
   line-height: 1.6;
-  background: rgba(255, 255, 255, 0.75);
-  border: 1px solid rgba(11, 111, 164, 0.14);
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(10, 138, 104, 0.16);
   border-radius: 16px;
-  padding: 8px 12px;
-  box-shadow: 0 4px 14px rgba(11, 111, 164, 0.07);
+  padding: 6px 10px;
+  box-shadow: 0 4px 14px rgba(10, 138, 104, 0.08);
 }
 
-.header-status p { margin: 2px 0; color: #3D6A80; }
+.header-status p { margin: 2px 0; color: #3D6B58; }
 
-/* 頁籤：iOS 分段控制器——膠囊形底座，選中那段是白色帶柔和陰影。 */
+/* 右上角伺服器切換器：狀態膠囊裡的一行，小字標籤加緊湊下拉選單。 */
+.server-switch {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+
+.server-switch label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #3D6B58;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.header-status .server-select {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 110px;
+  max-width: 200px;
+  padding: 6px 10px;
+  font-size: 14px;
+  border-radius: 999px;
+  background: #fff;
+}
+
+/* 設定頁「伺服器」卡片裡的列表：每台伺服器一行，名字、帳號、
+   金鑰狀態、數據集各一行，右邊是操作按鈕。 */
+.server-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid rgba(10, 138, 104, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 8px 10px;
+  margin-top: 8px;
+}
+
+.server-meta { min-width: 0; }
+.server-meta p { margin: 2px 0; }
+.server-name { font-weight: 700; color: #1F3D4D; font-size: 15px; }
+
+/* 「目前」小徽章：春綠底白字小膠囊。 */
+.server-current {
+  display: inline-block;
+  background: #0E9F7E;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: 4px;
+}
+
+.server-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.server-actions button {
+  margin-top: 0;
+  padding: 6px 12px;
+  font-size: 14px;
+}
+
+/* 頁籤：iOS 分段控制器——膠囊形底座，選中那段是白色帶柔和陰影。
+   寬度要寫死（body 是 flex 欄，auto margin 會讓它縮成內容寬、
+   按鈕文字跟著折行）。 */
 .tabs {
+  flex-shrink: 0;
   display: flex;
   gap: 4px;
   padding: 4px;
+  width: calc(100% - 32px);
   max-width: 1240px;
-  margin: 14px auto 0;
-  background: rgba(11, 111, 164, 0.08);
+  margin: 10px auto 0;
+  background: rgba(10, 138, 104, 0.10);
   border-radius: 999px;
 }
 
 .tab {
   flex: 1;
   margin-top: 0;
-  padding: 9px 10px;
+  padding: 7px 10px;
   border: none;
   background: transparent;
   border-radius: 999px;
   cursor: pointer;
   font-size: 16px;
   font-weight: 500;
-  color: #4A7186;
+  color: #4A7A6A;
 }
 
 .tab.active {
   background: #fff;
-  color: #0B6FA4;
+  color: #0A8A68;
   font-weight: 700;
-  box-shadow: 0 2px 8px rgba(11, 111, 164, 0.15);
+  box-shadow: 0 2px 8px rgba(10, 138, 104, 0.16);
 }
 
 main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
   max-width: 1240px;
   margin: 0 auto;
-  padding: 14px 16px 48px;
+  padding: 10px 16px 12px;
 }
 
-/* 面板：白色半透明磨砂卡片，大圓角、柔和海藍陰影。 */
+/* 面板：白色半透明磨砂卡片，大圓角、柔和春綠陰影。
+   桌面上一屏放下：面板佔滿剩餘高度，內容在面板內部滾動。 */
 .panel {
   display: none;
-  background: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.88);
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
-  border: 1px solid rgba(11, 111, 164, 0.12);
+  border: 1px solid rgba(10, 138, 104, 0.14);
   border-radius: 20px;
-  padding: 22px 18px;
-  margin-top: 12px;
-  box-shadow: 0 10px 28px rgba(11, 111, 164, 0.08);
+  padding: 16px;
+  margin-top: 10px;
+  box-shadow: 0 10px 28px rgba(10, 138, 104, 0.09);
+  flex: 1;
+  min-height: 0;
 }
 
-.panel.active { display: block; }
+.panel.active { display: flex; flex-direction: column; }
 
-/* 生圖頁左右兩欄：左邊控制區固定寬、欄內可捲動；右邊預覽區佔剩餘寬度。 */
+/* 生圖頁不滾動：左右兩欄自己在內部滾動。
+   歷史、設定頁內容長了，在面板內部滾動。 */
+#tab-generate.panel.active { overflow: hidden; }
+#tab-history.panel.active,
+#tab-settings.panel.active { overflow-y: auto; }
+
+/* 生圖頁左右兩欄：左邊控制區固定寬、欄內可捲動；右邊預覽區佔剩餘寬度，
+   圖比預覽區大時預覽區內部捲動，圖片按原比例顯示、不壓扁。 */
 .gen-layout {
   display: flex;
   gap: 18px;
-  align-items: flex-start;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
 }
 
 .gen-controls {
   flex: 0 0 400px;
   min-width: 0;
-  position: sticky;
-  top: 96px;
-  max-height: calc(100vh - 116px);
+  min-height: 0;
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 6px;
 }
 
 .gen-preview {
   flex: 1;
   min-width: 0;
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid rgba(11, 111, 164, 0.10);
+  min-height: 0;
+  overflow: auto;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(214, 246, 226, 0.55));
+  border: 1px solid rgba(10, 138, 104, 0.14);
   border-radius: 16px;
-  padding: 16px;
+  padding: 14px;
 }
 
-.gen-preview h2 { margin: 0 0 8px; }
+.gen-preview h2 { margin: 0 0 6px; }
 
 /* 預覽區的操作按鈕（複製／再用／刪除）靠左一排，空間不夠自動換行。 */
-.preview-actions { margin-top: 14px; }
+.preview-actions { margin-top: 10px; }
 
-/* 設定頁：功能拆成三張獨立卡片，橫向一排、空間不夠自動換行。 */
+/* 設定頁：功能拆成四張獨立卡片，橫向一排、空間不夠自動換行。 */
 .settings-cards {
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
   align-items: stretch;
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .settings-card {
   flex: 1 1 260px;
   min-width: 260px;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid rgba(11, 111, 164, 0.12);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(10, 138, 104, 0.14);
   border-radius: 18px;
-  padding: 16px;
-  box-shadow: 0 6px 18px rgba(11, 111, 164, 0.06);
+  padding: 14px;
+  box-shadow: 0 6px 18px rgba(10, 138, 104, 0.07);
 }
 
 .settings-card h3 { margin: 0 0 8px; }
 
-.panel h2 { margin: 0; font-size: 19px; color: #0B6FA4; }
-.panel h3 { margin: 20px 0 4px; font-size: 16px; color: #0B6FA4; }
+.panel h2 { margin: 0; font-size: 19px; color: #0A8A68; }
+.panel h3 { margin: 12px 0 4px; font-size: 16px; color: #0A8A68; }
 
-label { display: block; font-weight: 600; margin: 12px 0 6px; color: #1F3D4D; }
+label { display: block; font-weight: 600; font-size: 15px; margin: 8px 0 4px; color: #1F3D4D; }
 
 textarea, input[type="text"], input[type="password"],
 input[type="number"], select {
   width: 100%;
-  padding: 12px;
-  font-size: 16px;
+  padding: 10px;
+  font-size: 15px;
   color: #1F3D4D;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid #CFE3EC;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #CDE8DA;
   border-radius: 12px;
   outline: none;
   box-sizing: border-box;
@@ -171,30 +274,30 @@ input[type="number"], select {
 
 textarea:focus, input[type="text"]:focus, input[type="password"]:focus,
 input[type="number"]:focus, select:focus {
-  border-color: #0E7C9B;
-  box-shadow: 0 0 0 3px rgba(14, 124, 155, 0.15);
+  border-color: #0E9F7E;
+  box-shadow: 0 0 0 3px rgba(14, 159, 126, 0.18);
 }
 
-/* 按鈕：全部膠囊形。主按鈕海藍填充白字；次按鈕白底海藍邊框。 */
+/* 按鈕：全部膠囊形。主按鈕春綠填充白字；次按鈕白底春綠邊框。 */
 button, a.primary {
   display: inline-block;
-  margin-top: 12px;
-  padding: 11px 22px;
+  margin-top: 8px;
+  padding: 9px 18px;
   font-size: 16px;
   font-weight: 600;
-  border: 1px solid #BFD9E4;
+  border: 1px solid #BFE3D6;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
-  color: #0B6FA4;
+  background: rgba(255, 255, 255, 0.92);
+  color: #0A8A68;
   cursor: pointer;
   text-decoration: none;
 }
 
 button.primary, a.primary {
-  background: #0E7C9B;
-  border-color: #0E7C9B;
+  background: #0E9F7E;
+  border-color: #0E9F7E;
   color: #fff;
-  box-shadow: 0 6px 16px rgba(14, 124, 155, 0.25);
+  box-shadow: 0 6px 16px rgba(14, 159, 126, 0.28);
 }
 
 button:hover, a.primary:hover { opacity: 0.92; }
@@ -212,28 +315,28 @@ button:hover, a.primary:hover { opacity: 0.92; }
   display: flex;
   gap: 4px;
   padding: 4px;
-  background: rgba(11, 111, 164, 0.08);
+  background: rgba(10, 138, 104, 0.10);
   border-radius: 999px;
 }
 
 .mode-btn {
   flex: 1;
   margin-top: 0;
-  padding: 9px 10px;
+  padding: 7px 10px;
   border: none;
   background: transparent;
   border-radius: 999px;
   cursor: pointer;
   font-size: 15px;
   font-weight: 500;
-  color: #4A7186;
+  color: #4A7A6A;
 }
 
 .mode-btn.active {
   background: #fff;
-  color: #0B6FA4;
+  color: #0A8A68;
   font-weight: 700;
-  box-shadow: 0 2px 8px rgba(11, 111, 164, 0.15);
+  box-shadow: 0 2px 8px rgba(10, 138, 104, 0.16);
 }
 
 input[type="file"] {
@@ -245,14 +348,14 @@ input[type="file"] {
 
 input[type="range"] {
   flex: 1;
-  accent-color: #0E7C9B;
+  accent-color: #0E9F7E;
 }
 
 .range-val {
   min-width: 44px;
   text-align: right;
   font-weight: 700;
-  color: #0B6FA4;
+  color: #0A8A68;
   align-self: center;
 }
 
@@ -275,7 +378,7 @@ input[type="range"] {
   height: 100%;
   object-fit: cover;
   border-radius: 12px;
-  border: 1px solid #CFE3EC;
+  border: 1px solid #CDE8DA;
 }
 
 .ref-thumb button {
@@ -289,12 +392,12 @@ input[type="range"] {
   line-height: 1;
   border: none;
   border-radius: 50%;
-  background: #0E7C9B;
+  background: #0E9F7E;
   color: #fff;
   font-size: 16px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 2px 6px rgba(11, 111, 164, 0.3);
+  box-shadow: 0 2px 6px rgba(10, 138, 104, 0.3);
 }
 
 .row { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -303,21 +406,21 @@ input[type="range"] {
 
 .hidden { display: none !important; }
 
-.msg { color: #0B6FA4; min-height: 1.4em; }
+.msg { color: #0A8A68; min-height: 1.4em; }
 .warn { color: #A86A00; font-weight: bold; }
 .error { color: #C0392B; }
-.note { color: #5B7E8F; font-size: 14px; }
-.status { font-size: 17px; font-weight: bold; color: #0B6FA4; }
+.note { color: #4A7A6A; font-size: 13px; line-height: 1.5; }
+.status { font-size: 17px; font-weight: bold; color: #0A8A68; }
 .prompt { font-weight: bold; word-break: break-word; white-space: pre-wrap; }
 
 .prompt-label {
   font-size: 13px;
-  color: #5B7E8F;
-  margin: 12px 0 2px;
+  color: #4A7A6A;
+  margin: 8px 0 2px;
   font-weight: bold;
 }
 
-/* 登入頁：同一套磨砂卡片，背景沿用頁面海水漸變。 */
+/* 登入頁：同一套磨砂卡片，背景沿用頁面春綠漸變。 */
 .auth-screen {
   position: fixed;
   inset: 0;
@@ -325,7 +428,7 @@ input[type="range"] {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  background: linear-gradient(180deg, rgba(234, 246, 247, 0.96), rgba(223, 240, 250, 0.96));
+  background: linear-gradient(160deg, rgba(207, 247, 201, 0.97), rgba(168, 235, 201, 0.97) 40%, rgba(124, 198, 247, 0.97));
   overflow-y: auto;
   padding: 40px 16px;
 }
@@ -333,20 +436,20 @@ input[type="range"] {
 .auth-box {
   width: 100%;
   max-width: 480px;
-  background: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.9);
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
-  border: 1px solid rgba(11, 111, 164, 0.12);
+  border: 1px solid rgba(10, 138, 104, 0.14);
   border-radius: 20px;
   padding: 26px 22px;
-  box-shadow: 0 16px 40px rgba(11, 111, 164, 0.12);
+  box-shadow: 0 16px 40px rgba(10, 138, 104, 0.13);
 }
 
-.auth-box h1 { margin: 0 0 8px; font-size: 22px; color: #0B6FA4; }
+.auth-box h1 { margin: 0 0 8px; font-size: 22px; color: #0A8A68; }
 .auth-box h2 { margin: 8px 0; font-size: 18px; color: #1F3D4D; }
 
 code {
-  background: #E8F3F7;
+  background: #E6F6EC;
   padding: 2px 6px;
   border-radius: 4px;
   word-break: break-all;
@@ -355,10 +458,11 @@ code {
 .result {
   display: block;
   max-width: 100%;
-  margin-top: 12px;
-  border: 1px solid rgba(11, 111, 164, 0.14);
+  height: auto;
+  margin-top: 10px;
+  border: 1px solid rgba(10, 138, 104, 0.16);
   border-radius: 16px;
-  box-shadow: 0 8px 22px rgba(11, 111, 164, 0.08);
+  box-shadow: 0 8px 22px rgba(10, 138, 104, 0.09);
 }
 
 /* 歷史記錄 */
@@ -377,17 +481,17 @@ code {
 .job-card {
   display: flex;
   gap: 12px;
-  border: 1px solid rgba(11, 111, 164, 0.12);
+  border: 1px solid rgba(10, 138, 104, 0.14);
   border-radius: 18px;
   padding: 12px;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.88);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
-  box-shadow: 0 6px 18px rgba(11, 111, 164, 0.07);
+  box-shadow: 0 6px 18px rgba(10, 138, 104, 0.08);
 }
 
-.job-card:hover { border-color: #0E7C9B; }
+.job-card:hover { border-color: #0E9F7E; }
 
 .thumb {
   width: 96px;
@@ -401,8 +505,8 @@ code {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #E3EFF4;
-  color: #6E93A5;
+  background: #E2F5E9;
+  color: #5F8A72;
   font-size: 13px;
 }
 
@@ -419,17 +523,23 @@ code {
 }
 
 @media (max-width: 900px) {
-  /* 窄屏：兩欄上下疊起來，控制區在上、預覽區在下；設定卡片也上下疊。 */
+  /* 窄屏：恢復頁面滾動，兩欄上下疊起來，控制區在上、預覽區在下；
+     設定卡片也上下疊。 */
+  body { display: block; height: auto; overflow: visible; }
+  main { display: block; }
+  .panel { overflow: visible; }
+  .panel.active { display: block; }
+  #tab-generate.panel.active { overflow: visible; }
+  #tab-history.panel.active,
+  #tab-settings.panel.active { overflow: visible; }
   .gen-layout { flex-direction: column; }
   .gen-controls {
     flex: none;
     width: 100%;
-    position: static;
-    max-height: none;
     overflow: visible;
     padding-right: 0;
   }
-  .gen-preview { width: 100%; }
+  .gen-preview { width: 100%; overflow: visible; }
   .settings-cards { flex-direction: column; }
   .settings-card { min-width: 0; }
 }
@@ -443,6 +553,10 @@ code {
     text-align: left;
     padding-top: 8px;
   }
+  .server-switch { justify-content: flex-start; }
+  .header-status .server-select { flex: 1; max-width: none; }
+  .server-row { flex-direction: column; }
+  .server-actions { justify-content: flex-start; }
   .tab { font-size: 15px; }
   .thumb { width: 72px; height: 72px; }
   .panel { padding: 18px 14px; }

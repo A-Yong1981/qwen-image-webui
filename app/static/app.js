@@ -14,6 +14,9 @@ let previewJob = null;
 let displayedJob = null;
 let authed = false;
 let refreshTimer = null;
+let servers = [];
+let currentServerId = null;
+let editingServerId = null;
 
 function $(id) {
   return document.getElementById(id);
@@ -97,6 +100,7 @@ function enterApp() {
   authed = true;
   hideAuthScreen();
   loadSettings();
+  loadServers();
   loadQuota();
   loadStatus();
   refreshJobs();
@@ -174,6 +178,10 @@ async function loadSettings() {
     $("keySavedNote").textContent = s.key_saved
       ? `金鑰已保存${s.key_hint ? "（" + s.key_hint + "）" : ""}，要換金鑰再貼新的進來。`
       : "";
+    const cur = (s.servers || []).find((x) => x.id === s.current_server_id);
+    $("currentServerNote").textContent = cur
+      ? `目前伺服器：${cur.name}（${cur.username}）${cur.dataset ? "，已配數據集" : "，未配數據集（每次下載模型）"}。`
+      : "目前沒有伺服器，請在下方「伺服器」區新增一個。";
     $("keyWarning").classList.toggle("hidden", configured);
   } catch (e) {
     configured = false;
@@ -231,6 +239,192 @@ $("testBtn").addEventListener("click", async () => {
     : "連線失敗：" + (data.error || "請檢查金鑰是否正確。");
 });
 
+// ---- 設定：伺服器（多 Kaggle 帳號）----
+async function loadServers() {
+  try {
+    const r = await fetch("/api/servers");
+    if (r.status === 401) { showLogin(); return; }
+    const data = await r.json();
+    servers = data.servers || [];
+    currentServerId = data.current_server_id || null;
+    const sel = $("serverSelect");
+    sel.innerHTML = "";
+    if (!servers.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "尚未設定";
+      sel.appendChild(opt);
+      sel.disabled = true;
+    } else {
+      sel.disabled = false;
+      servers.forEach((s) => {
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.textContent = s.name;
+        if (s.id === currentServerId) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+    renderServerList();
+  } catch (e) {
+    // 暫時連不上就等下一次刷新。
+  }
+}
+
+function renderServerList() {
+  const box = $("serverList");
+  box.innerHTML = "";
+  if (!servers.length) {
+    box.innerHTML = '<p class="note">還沒有伺服器，在下面新增一個。</p>';
+    return;
+  }
+  servers.forEach((s) => {
+    const row = document.createElement("div");
+    row.className = "server-row";
+    const isCurrent = s.id === currentServerId;
+    row.innerHTML = `
+      <div class="server-meta">
+        <p class="server-name">${escapeHtml(s.name)}${isCurrent ? ' <span class="server-current">目前</span>' : ""}</p>
+        <p class="note">帳號：${escapeHtml(s.username)}　金鑰：${s.key_saved ? "已保存" + (s.key_hint || "") : "未填"}</p>
+        <p class="note">數據集：${s.dataset ? escapeHtml(s.dataset) : "未配（每次下載模型）"}</p>
+      </div>`;
+    const actions = document.createElement("div");
+    actions.className = "server-actions";
+    if (!isCurrent) {
+      const act = document.createElement("button");
+      act.type = "button";
+      act.textContent = "設為目前";
+      act.addEventListener("click", () => activateServer(s.id));
+      actions.appendChild(act);
+    }
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "編輯";
+    edit.addEventListener("click", () => startServerEdit(s));
+    actions.appendChild(edit);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn-danger";
+    del.textContent = "刪除";
+    del.addEventListener("click", () => deleteServer(s));
+    actions.appendChild(del);
+    row.appendChild(actions);
+    box.appendChild(row);
+  });
+}
+
+async function activateServer(id) {
+  const r = await fetch(`/api/servers/${encodeURIComponent(id)}/activate`, { method: "POST" });
+  if (r.status === 401) { showLogin(); return; }
+  const data = await r.json();
+  if (!r.ok) {
+    $("serverMsg").textContent = "切換失敗：" + (data.error || "請稍後再試。");
+    await loadServers();
+    return;
+  }
+  $("serverMsg").textContent = `已切換到「${data.server.name}」，之後的新任務都用它跑。`;
+  currentServerId = data.server.id;
+  await loadSettings();
+  await loadServers();
+  await loadQuota();
+  await loadStatus();
+  await refreshJobs();
+}
+
+function startServerEdit(s) {
+  editingServerId = s.id;
+  $("serverFormTitle").textContent = "編輯伺服器";
+  $("serverName").value = s.name;
+  $("serverUser").value = s.username;
+  $("serverKey").value = "";
+  $("serverKey").placeholder = s.key_saved ? "已保存的金鑰（留空表示不改）" : "貼上 kaggle.json 裡的 key";
+  $("serverDataset").value = s.dataset || "";
+  $("cancelServerEditBtn").classList.remove("hidden");
+  $("serverMsg").textContent = "";
+  $("serverName").focus();
+}
+
+function resetServerForm() {
+  editingServerId = null;
+  $("serverFormTitle").textContent = "新增伺服器";
+  $("serverName").value = "";
+  $("serverUser").value = "";
+  $("serverKey").value = "";
+  $("serverKey").placeholder = "貼上 kaggle.json 裡的 key";
+  $("serverDataset").value = "";
+  $("cancelServerEditBtn").classList.add("hidden");
+}
+
+$("cancelServerEditBtn").addEventListener("click", () => {
+  resetServerForm();
+  $("serverMsg").textContent = "";
+});
+
+$("saveServerBtn").addEventListener("click", async () => {
+  const name = $("serverName").value.trim();
+  const username = $("serverUser").value.trim();
+  const key = $("serverKey").value.trim();
+  const dataset = $("serverDataset").value.trim();
+  const msg = $("serverMsg");
+  if (!name) {
+    msg.textContent = "請給伺服器起個名字。";
+    return;
+  }
+  if (!username) {
+    msg.textContent = "請填 Kaggle 用戶名。";
+    return;
+  }
+  if (!editingServerId && !key) {
+    msg.textContent = "新增伺服器要填金鑰。";
+    return;
+  }
+  msg.textContent = "保存中……";
+  const body = { name, username, key, dataset };
+  const url = editingServerId
+    ? `/api/servers/${encodeURIComponent(editingServerId)}`
+    : "/api/servers";
+  const r = await fetch(url, {
+    method: editingServerId ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (r.status === 401) { showLogin(); return; }
+  const data = await r.json();
+  if (!r.ok) {
+    msg.textContent = "保存失敗：" + (data.error || "請稍後再試。");
+    return;
+  }
+  msg.textContent = editingServerId ? "已保存。" : `已新增伺服器「${data.server.name}」。`;
+  resetServerForm();
+  await loadServers();
+  await loadSettings();
+  await loadQuota();
+  await loadStatus();
+});
+
+async function deleteServer(s) {
+  if (!window.confirm(`確定刪除伺服器「${s.name}」嗎？這個帳號以後就不能用來生圖了，已經跑過的記錄不受影響。`)) return;
+  const msg = $("serverMsg");
+  const r = await fetch(`/api/servers/${encodeURIComponent(s.id)}`, { method: "DELETE" });
+  if (r.status === 401) { showLogin(); return; }
+  const data = await r.json();
+  if (!r.ok) {
+    msg.textContent = "刪除失敗：" + (data.error || "請稍後再試。");
+    return;
+  }
+  if (editingServerId === s.id) resetServerForm();
+  msg.textContent = `已刪除伺服器「${s.name}」。`;
+  await loadServers();
+  await loadSettings();
+  await loadQuota();
+  await loadStatus();
+}
+
+$("serverSelect").addEventListener("change", () => {
+  const id = $("serverSelect").value;
+  if (id) activateServer(id);
+});
+
 // ---- 設定：修改密碼 ----
 $("logoutBtn").addEventListener("click", async () => {
   await fetch("/api/auth/logout", { method: "POST" });
@@ -282,12 +476,13 @@ async function loadStatus() {
         : `Kaggle：連不上（${s.kaggle_error || "原因不明"}）`;
     $("serverStatusLine").textContent =
       `已運行 ${fmtUptime(s.uptime_seconds)}　${kaggle}　` +
-      `額度剩 ${fmtSeconds(s.quota.remaining_seconds)}　` +
-      `排隊 ${s.counts.queued}　進行中 ${s.counts.running}`;
+      `額度剩 ${fmtSeconds(s.quota.remaining_seconds)}`;
     const cur = s.current_job;
-    $("serverStatusCurrent").textContent = cur
-      ? `目前任務：${truncateText(cur.prompt, 40)}`
-      : "目前沒有進行中的任務。";
+    $("serverStatusCurrent").textContent =
+      (cur
+        ? `目前任務：${truncateText(cur.prompt, 40)}`
+        : "目前沒有進行中的任務。") +
+      `　排隊 ${s.counts.queued}　進行中 ${s.counts.running}`;
   } catch (e) {
     $("serverStatusLine").textContent = "伺服器狀態讀取失敗，請稍後再試。";
     $("serverStatusCurrent").textContent = "";
@@ -544,14 +739,17 @@ function renderCurrentJob() {
   box.classList.remove("hidden");
   $("currentStatus").textContent =
     `狀態：${STATUS_TEXT[job.status] || job.status}　建立時間：${fmtTime(job.created_at)}` +
-    (job.finished_at ? `　完成時間：${fmtTime(job.finished_at)}` : "");
+    (job.finished_at ? `　完成時間：${fmtTime(job.finished_at)}` : "") +
+    (job.server ? `　伺服器：${job.server}` : "");
   $("currentPrompt").textContent = job.prompt;
   $("currentOptions").textContent = fmtOptionsFull(job.options);
   $("currentNote").textContent =
     job.status === "queued"
       ? "在排隊等前面的任務跑完，一次只跑一張。"
       : job.status === "running"
-        ? "正在跑：先下載 14.23GB 模型（這步最花時間），再啟動 ComfyUI 生圖，請耐心等幾分鐘。"
+        ? (job.options && job.options.use_dataset
+          ? "正在跑：用已掛載的數據集，不用重新下載模型，啟動 ComfyUI 生圖中，請耐心等幾分鐘。"
+          : "正在跑：先下載 14.23GB 模型（這步最花時間），再啟動 ComfyUI 生圖，請耐心等幾分鐘。")
         : job.status === "completed"
           ? `已完成，生圖本身用了 ${fmtSeconds(job.generation_seconds)}，` +
             `整個任務用了 ${fmtSeconds(job.gpu_seconds)}。`
@@ -601,7 +799,7 @@ function renderHistory() {
         <p class="prompt-label">原始提示詞</p>
         <p class="prompt">${escapeHtml(job.prompt)}</p>
         ${job.options ? `<p class="note">${escapeHtml(fmtOptions(job.options))}</p>` : ""}
-        <p class="note">${STATUS_TEXT[job.status] || job.status}　${fmtTime(job.created_at)}</p>
+        <p class="note">${STATUS_TEXT[job.status] || job.status}　${fmtTime(job.created_at)}${job.server ? "　伺服器：" + escapeHtml(job.server) : ""}</p>
         ${job.status === "failed" && job.error
           ? `<p class="error">失敗原因：${escapeHtml(job.error)}</p>` : ""}
       </div>`;

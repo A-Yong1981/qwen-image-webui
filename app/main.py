@@ -12,6 +12,12 @@
 本身絕不存明文、絕不寫進日誌。登入後發 24 小時 HMAC 簽名的登入憑證
 （cookie）；改密碼會換簽名密鑰，舊憑證立刻失效，要重新登入。
 預設帳號 anyong、預設密碼 admin，登入後請到設定頁改掉。
+v2.5：多伺服器——一個伺服器就是一個 Kaggle 帳號（名字、用戶名、
+金鑰、可選的數據集），存在 /data/settings.json，右上角切換；
+有配數據集的伺服器，內核提交時掛上數據集就不用再下載 14.23GB
+模型（見 kernel_template.py 第 3 步），沒配數據集的伺服器走
+下載老路。任務建立時記下是哪個伺服器跑的，換伺服器不影響
+已經排隊的任務。
 """
 import base64
 import hashlib
@@ -44,7 +50,8 @@ from PIL import Image
 BASE_URL = "https://www.kaggle.com/api/v1"
 KERNEL_OWNER = "xiongyong5207"
 KERNEL_SLUG = "qwen-image-21-gguf-t4-test"
-KERNEL_REF = f"{KERNEL_OWNER}/{KERNEL_SLUG}"
+# 內核的完整引用是 {伺服器用戶名}/{KERNEL_SLUG}，每個伺服器
+# 各有自己的內核（帳號不同，內核就不同）；不要再寫死單一引用。
 WEEKLY_QUOTA_SECONDS = 108000
 POLL_INTERVAL_SECONDS = 60
 MAX_WAIT_SECONDS = 2 * 3600
@@ -96,37 +103,143 @@ class KaggleError(RuntimeError):
     """Kaggle 請求失敗（不含任何憑證內容）。"""
 
 
-# ---------------------------------------------------------------- 憑證
-def load_settings():
-    """先讀環境變數，再讓設定檔覆蓋（設定頁是主要填寫入口）。"""
-    settings = {"username": "", "key": ""}
+# ---------------------------------------------------------------- 伺服器（多 Kaggle 帳號）
+# settings.json v2.5 格式：
+#   {"version": 3, "current_server_id": "<id>", "servers": [
+#     {"id": "<id>", "name": "主號", "username": "xiongyong5207",
+#      "key": "...", "dataset": "xiongyong5207/qwen-image-21-models"}]}
+# 一個伺服器就是一個 Kaggle 帳號，各有自己的每週 GPU 額度。
+# dataset 是這個帳號自己的私有數據集（模型緩存），可留空；
+# 私有數據集只對自己的帳號可見，別的帳號填了也掛不上。
+# 舊格式 {"username", "key"} 第一次讀到時自動遷移成一個「主號」
+# 伺服器，金鑰一個字都不會丟。
+DEFAULT_DATASET_REF = "xiongyong5207/qwen-image-21-models"
+
+
+def _new_server(name, username, key, dataset=""):
+    return {"id": "srv-" + uuid.uuid4().hex[:8], "name": name,
+            "username": (username or "").strip(),
+            "key": (key or "").strip(), "dataset": (dataset or "").strip()}
+
+
+def _default_dataset_for(username):
+    """預設數據集：只有 xiongyong5207 這個帳號才預填，
+    私有數據集只對自己的帳號可見，別的帳號預填了也掛不上。"""
+    return DEFAULT_DATASET_REF if username == KERNEL_OWNER else ""
+
+
+def _clean_server(raw):
+    """把一個伺服器記錄整理成合法形狀；缺 id 就補一個。"""
+    if not isinstance(raw, dict):
+        return None
+    srv = _new_server(raw.get("name") or "未命名",
+                      raw.get("username"), raw.get("key"),
+                      raw.get("dataset"))
+    if raw.get("id"):
+        srv["id"] = str(raw["id"])
+    return srv
+
+
+def _settings_from_env():
+    """環境變數 KAGGLE_USERNAME / KAGGLE_KEY：只有在設定檔完全
+    不存在時才用（第一次啟動、還沒在設定頁填過的情況）。"""
     if os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"):
-        settings = {"username": os.environ["KAGGLE_USERNAME"],
-                    "key": os.environ["KAGGLE_KEY"]}
+        srv = _new_server("主號", os.environ["KAGGLE_USERNAME"],
+                          os.environ["KAGGLE_KEY"],
+                          _default_dataset_for(os.environ["KAGGLE_USERNAME"]))
+        return {"version": 3, "current_server_id": srv["id"],
+                "servers": [srv]}
+    return {"version": 3, "current_server_id": None, "servers": []}
+
+
+def load_settings():
+    """讀 /data/settings.json，回傳 v2.5 格式的完整設定
+    （含金鑰，只給後端內部用；回前端的接口另外過濾）。
+
+    舊格式 {"username", "key"}：自動遷移成一個「主號」伺服器，
+    數據集預填（見 _default_dataset_for），並把遷移後的檔案
+    寫回去；舊金鑰原封不動。"""
     try:
         if SETTINGS_PATH.exists():
             with open(SETTINGS_PATH, encoding="utf-8") as f:
                 saved = json.load(f)
-            if saved.get("username") and saved.get("key"):
-                settings = {"username": saved["username"], "key": saved["key"]}
+            if isinstance(saved, dict) and isinstance(saved.get("servers"), list):
+                servers = [s for s in (_clean_server(r)
+                                       for r in saved["servers"]) if s]
+                current = saved.get("current_server_id")
+                if current not in [s["id"] for s in servers]:
+                    current = servers[0]["id"] if servers else None
+                return {"version": 3, "current_server_id": current,
+                        "servers": servers}
+            if isinstance(saved, dict) and saved.get("username") \
+                    and saved.get("key"):
+                srv = _new_server("主號", saved["username"], saved["key"],
+                                  _default_dataset_for(saved["username"]))
+                migrated = {"version": 3, "current_server_id": srv["id"],
+                            "servers": [srv]}
+                save_settings_full(migrated)
+                return migrated
     except Exception:
         pass
-    return settings
+    return _settings_from_env()
 
 
-def save_settings(username, key):
-    """寫 /data/settings.json，權限 600。值絕不寫進日誌。"""
+def save_settings_full(settings):
+    """寫整個 /data/settings.json，權限 600。值絕不寫進日誌。"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(SETTINGS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.write(fd, json.dumps(
-            {"username": username, "key": key}, ensure_ascii=False).encode("utf-8"))
+        os.write(fd, json.dumps(settings, ensure_ascii=False).encode("utf-8"))
     finally:
         os.close(fd)
     try:
         os.chmod(SETTINGS_PATH, 0o600)
     except OSError:
         pass
+
+
+def current_server(settings=None):
+    """目前伺服器（右上角切換器選中的那個）；沒有就回第一個，
+    一個都沒有就回 None。"""
+    settings = settings or load_settings()
+    servers = settings.get("servers") or []
+    if not servers:
+        return None
+    for srv in servers:
+        if srv["id"] == settings.get("current_server_id"):
+            return srv
+    return servers[0]
+
+
+def find_server(settings, server_id):
+    for srv in settings.get("servers") or []:
+        if srv["id"] == server_id:
+            return srv
+    return None
+
+
+def find_server_by_name(settings, name):
+    for srv in settings.get("servers") or []:
+        if srv["name"] == name:
+            return srv
+    return None
+
+
+def _key_hint(key):
+    key = key or ""
+    if len(key) >= 8:
+        return "••••" + key[-4:]
+    if key:
+        return "••••"
+    return ""
+
+
+def public_server(srv):
+    """回給前端的伺服器資料：絕不含完整金鑰，只回 key_saved 與後 4 位。"""
+    return {"id": srv["id"], "name": srv["name"],
+            "username": srv["username"], "dataset": srv.get("dataset") or "",
+            "key_saved": bool(srv.get("key")),
+            "key_hint": _key_hint(srv.get("key"))}
 
 
 # ---------------------------------------------------------------- 帳號密碼登入
@@ -320,10 +433,10 @@ def download_bytes(url, timeout=600):
         raise KaggleError(f"下載輸出檔失敗：{e}")
 
 
-def download_zip(settings, timeout=600):
-    """備用路徑：整包下載輸出（zip）。"""
+def download_zip(settings, kernel_owner, timeout=600):
+    """備用路徑：整包下載輸出（zip）。內核屬於哪個帳號就從哪個帳號下載。"""
     req = urllib.request.Request(
-        f"{BASE_URL}/kernels/output/{KERNEL_OWNER}/{KERNEL_SLUG}",
+        f"{BASE_URL}/kernels/output/{kernel_owner}/{KERNEL_SLUG}",
         headers={"Authorization": _auth_header(settings)})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -362,12 +475,21 @@ def init_db():
             generation_seconds REAL,
             error TEXT,
             kernel_version INTEGER,
-            options TEXT)""")
+            options TEXT,
+            server TEXT)""")
         # v2.4：舊庫沒有 options 欄位，第一次啟動時補上。
         cols = [r[1] for r in conn.execute(
             "PRAGMA table_info(jobs)").fetchall()]
         if "options" not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN options TEXT")
+        # v2.5：舊庫沒有 server 欄位，第一次啟動時補上。
+        if "server" not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN server TEXT")
+        # 舊任務（或沒記下伺服器的任務）都是主號跑的，補上名字，
+        # 額度統計才不會漏；每次啟動都補，漏網的也補得到。
+        conn.execute(
+            "UPDATE jobs SET server = '主號' "
+            "WHERE server IS NULL OR server = ''")
         conn.commit()
         conn.close()
 
@@ -385,23 +507,29 @@ def _row_to_job(row):
         options = json.loads(raw_options) if raw_options else None
     except Exception:
         options = None
+    try:
+        server = row["server"]
+    except (IndexError, KeyError):
+        server = None
     return {"id": row["id"], "prompt": row["prompt"], "status": row["status"],
             "created_at": row["created_at"], "finished_at": row["finished_at"],
             "gpu_seconds": row["gpu_seconds"],
             "generation_seconds": row["generation_seconds"],
             "error": row["error"], "kernel_version": row["kernel_version"],
-            "options": options}
+            "options": options, "server": server}
 
 
-def create_job(prompt, options=None, job_id=None):
+def create_job(prompt, options=None, job_id=None, server=None):
+    """建一個任務。server 是跑這個任務的伺服器名字，
+    建立時就記下來，之後換伺服器也不影響它。"""
     job_id = job_id or uuid.uuid4().hex[:12]
     opts_json = (json.dumps(options, ensure_ascii=False)
                  if options else None)
     with DB_LOCK:
         conn = _conn()
-        conn.execute("INSERT INTO jobs (id, prompt, status, created_at, options) "
-                     "VALUES (?, ?, 'queued', ?, ?)",
-                     (job_id, prompt, _now(), opts_json))
+        conn.execute("INSERT INTO jobs (id, prompt, status, created_at, options, server) "
+                     "VALUES (?, ?, 'queued', ?, ?, ?)",
+                     (job_id, prompt, _now(), opts_json, server or ""))
         conn.commit()
         conn.close()
     return job_id
@@ -527,6 +655,9 @@ def _normalize_options(raw, ref_count=None, ref_urls=None):
         "steps": steps,
         "cfg": cfg,
         "ref_strength": ref_strength,
+        # 這個任務要不要掛數據集（由建立時選中的伺服器決定，
+        # 有配數據集才 True）；內核腳本第 3 步看這個值分流。
+        "use_dataset": bool(raw.get("use_dataset")),
     }
 
 
@@ -595,7 +726,7 @@ def extract_error_log(output):
     return text[-500:] if text else ""
 
 
-def download_outputs(job_id, settings, output):
+def download_outputs(job_id, settings, output, kernel_owner):
     """下載 PNG + test_summary.json + hardware.json。先走檔案連結，失敗再走整包 zip。"""
     files = output.get("files") or []
     by_name = {}
@@ -617,7 +748,7 @@ def download_outputs(job_id, settings, output):
         (JOBS_DIR / f"{job_id}.hardware.json").write_bytes(
             download_bytes(by_name["hardware.json"]))
     if png_bytes is None:
-        zip_bytes = download_zip(settings)
+        zip_bytes = download_zip(settings, kernel_owner)
         with zipfile.ZipFile(BytesIO(zip_bytes)) as z:
             names = z.namelist()
             png_name = next((n for n in names
@@ -643,16 +774,26 @@ def download_outputs(job_id, settings, output):
 
 
 def run_job(job):
-    """跑一個任務：提交 -> 輪詢 -> 下載。任何 401 都只記金鑰無效。"""
+    """跑一個任務：提交 -> 輪詢 -> 下載。任何 401 都只記金鑰無效。
+
+    用任務建立時記下的伺服器跑（不是當下切換到的那個），
+    那個伺服器刪了才退回目前伺服器。內核的擁有者就是這個
+    伺服器的 Kaggle 用戶名；有配數據集就掛上（不用再下載模型），
+    沒配就走下載老路。"""
     job_id = job["id"]
     settings = load_settings()
-    if not settings["username"] or not settings["key"]:
+    server = find_server_by_name(settings, job.get("server")) \
+        or current_server(settings)
+    if not server or not server.get("username") or not server.get("key"):
         fail_job(job_id, NO_KEY_TEXT)
         return
+    kernel_owner = server["username"]
+    kernel_ref = f"{kernel_owner}/{KERNEL_SLUG}"
+    credentials = {"username": server["username"], "key": server["key"]}
     try:
         script = build_kernel_script(job["prompt"], job.get("options"))
         body = {
-            "slug": KERNEL_REF,
+            "slug": kernel_ref,
             "newTitle": KERNEL_SLUG,
             "text": script,
             "language": "python",
@@ -661,7 +802,8 @@ def run_job(job):
             "enableGpu": True,
             "enableTpu": False,
             "enableInternet": True,
-            "datasetDataSources": [],
+            "datasetDataSources": [server["dataset"]]
+            if server.get("dataset") else [],
             "kernelDataSources": [],
             "competitionDataSources": [],
             "modelDataSources": [],
@@ -669,7 +811,7 @@ def run_job(job):
             "sessionTimeoutSeconds": 7200,
             "machineShape": "NvidiaTeslaT4",
         }
-        resp = kaggle_post(settings, "/kernels.KernelsApiService/SaveKernel",
+        resp = kaggle_post(credentials, "/kernels.KernelsApiService/SaveKernel",
                            body, timeout=120)
         version = resp.get("versionNumber") if isinstance(resp, dict) else None
         update_job(job_id, status="running", kernel_version=version)
@@ -678,8 +820,8 @@ def run_job(job):
         while time.time() < deadline:
             time.sleep(POLL_INTERVAL_SECONDS)
             st = kaggle_post(
-                settings, "/kernels.KernelsApiService/GetKernelSessionStatus",
-                {"userName": KERNEL_OWNER, "kernelSlug": KERNEL_SLUG}, timeout=60)
+                credentials, "/kernels.KernelsApiService/GetKernelSessionStatus",
+                {"userName": kernel_owner, "kernelSlug": KERNEL_SLUG}, timeout=60)
             status = (st or {}).get("status") if isinstance(st, dict) else None
             if status in ("COMPLETE", "ERROR", "FAILED", "CANCELLED"):
                 break
@@ -688,9 +830,9 @@ def run_job(job):
             if status in ("ERROR", "FAILED", "CANCELLED"):
                 try:
                     out = kaggle_post(
-                        settings,
+                        credentials,
                         "/kernels.KernelsApiService/ListKernelSessionOutput",
-                        {"userName": KERNEL_OWNER, "kernelSlug": KERNEL_SLUG,
+                        {"userName": kernel_owner, "kernelSlug": KERNEL_SLUG,
                          "pageSize": 20}, timeout=60)
                     err = extract_error_log(out)
                 except Exception:
@@ -700,10 +842,10 @@ def run_job(job):
                 fail_job(job_id, "等待超時（2 小時），任務未完成")
             return
         out = kaggle_post(
-            settings, "/kernels.KernelsApiService/ListKernelSessionOutput",
-            {"userName": KERNEL_OWNER, "kernelSlug": KERNEL_SLUG,
+            credentials, "/kernels.KernelsApiService/ListKernelSessionOutput",
+            {"userName": kernel_owner, "kernelSlug": KERNEL_SLUG,
              "pageSize": 20}, timeout=60)
-        summary = download_outputs(job_id, settings, out)
+        summary = download_outputs(job_id, credentials, out, kernel_owner)
         gen = summary.get("generation_seconds") if isinstance(summary, dict) else None
         total = summary.get("total_seconds") if isinstance(summary, dict) else None
         complete_job(job_id, generation_seconds=gen, gpu_seconds=total)
@@ -855,8 +997,10 @@ async def create_job_endpoint(request: Request):
     if (raw.get("mode") or "t2i") != "t2i":
         return JSONResponse(
             {"error": "參考生圖請用帶參考圖的提交方式"}, status_code=400)
+    server = current_server()
+    raw["use_dataset"] = bool(server and server.get("dataset"))
     options = _normalize_options(raw)
-    job_id = create_job(prompt, options)
+    job_id = create_job(prompt, options, server=server["name"] if server else "")
     return {"id": job_id, "status": "queued"}
 
 
@@ -935,9 +1079,12 @@ async def create_job_with_refs(request: Request):
     ref_urls = [f"{base}/refs/{job_id}/ref_{i}.jpg"
                 for i in range(1, len(processed) + 1)]
     raw = {k: v for k, v in form.items() if k != "refs"}
+    server = current_server()
+    raw["use_dataset"] = bool(server and server.get("dataset"))
     options = _normalize_options(raw, ref_count=len(processed),
                                  ref_urls=ref_urls)
-    create_job(prompt, options, job_id=job_id)
+    create_job(prompt, options, job_id=job_id,
+               server=server["name"] if server else "")
     return {"id": job_id, "status": "queued"}
 
 
@@ -1044,32 +1191,43 @@ def clear_jobs_endpoint():
 
 @app.get("/api/quota")
 def quota():
+    """目前伺服器的 GPU 額度用量：只算這個伺服器跑過的任務，
+    別的伺服器各有自己的額度，不混在一起。"""
+    server = current_server()
+    if not server:
+        return {"used_seconds": 0, "total_seconds": WEEKLY_QUOTA_SECONDS,
+                "remaining_seconds": WEEKLY_QUOTA_SECONDS}
     with DB_LOCK:
         conn = _conn()
         row = conn.execute(
             "SELECT COALESCE(SUM(gpu_seconds), 0) FROM jobs "
-            "WHERE status = 'completed'").fetchone()
+            "WHERE status = 'completed' AND server = ?",
+            (server["name"],)).fetchone()
         conn.close()
     used = float(row[0] or 0)
     return {"used_seconds": used, "total_seconds": WEEKLY_QUOTA_SECONDS,
             "remaining_seconds": max(0, WEEKLY_QUOTA_SECONDS - used)}
 
 
-_KAGGLE_REACH_CACHE = {"ts": 0.0, "reachable": False, "error": ""}
+_KAGGLE_REACH_CACHE = {"ts": 0.0, "reachable": False, "error": "",
+                       "server_id": None}
 
 
 def _kaggle_reachable():
-    """試連 Kaggle 一次，結果快取 60 秒。回傳 (通不通, 原因)。"""
-    settings = load_settings()
-    if not settings["username"] or not settings["key"]:
+    """試連 Kaggle 一次，結果快取 60 秒。回傳 (通不通, 原因)。
+    快取按伺服器分開：切換伺服器後重新試連，不拿上一個伺服器的結果充數。"""
+    server = current_server()
+    if not server or not server.get("username") or not server.get("key"):
         return False, "未設定金鑰"
     now = time.time()
-    if now - _KAGGLE_REACH_CACHE["ts"] < 60:
+    if now - _KAGGLE_REACH_CACHE["ts"] < 60 \
+            and _KAGGLE_REACH_CACHE.get("server_id") == server["id"]:
         return (_KAGGLE_REACH_CACHE["reachable"],
                 _KAGGLE_REACH_CACHE["error"])
+    credentials = {"username": server["username"], "key": server["key"]}
     try:
-        kaggle_get(settings, "/kernels/list?user=" +
-                   urllib.parse.quote(settings["username"], safe=""),
+        kaggle_get(credentials, "/kernels/list?user=" +
+                   urllib.parse.quote(server["username"], safe=""),
                    timeout=15)
         reachable, error = True, ""
     except KaggleAuthError:
@@ -1077,14 +1235,16 @@ def _kaggle_reachable():
     except KaggleError as e:
         reachable, error = False, str(e)[:100]
     _KAGGLE_REACH_CACHE.update(
-        {"ts": now, "reachable": reachable, "error": error})
+        {"ts": now, "reachable": reachable, "error": error,
+         "server_id": server["id"]})
     return reachable, error
 
 
 @app.get("/api/status")
 def server_status():
-    """伺服器運行狀態：運行時間、Kaggle 連線、額度、任務統計、進行中與最近完成的任務。"""
-    settings = load_settings()
+    """伺服器運行狀態：運行時間、目前伺服器、Kaggle 連線、
+    目前伺服器的額度、任務統計、進行中與最近完成的任務。"""
+    server = current_server()
     reachable, kaggle_error = _kaggle_reachable()
     with DB_LOCK:
         conn = _conn()
@@ -1099,14 +1259,20 @@ def server_status():
         last = conn.execute(
             "SELECT * FROM jobs WHERE finished_at IS NOT NULL "
             "ORDER BY finished_at DESC LIMIT 1").fetchone()
-        used_row = conn.execute(
-            "SELECT COALESCE(SUM(gpu_seconds), 0) FROM jobs "
-            "WHERE status = 'completed'").fetchone()
+        if server:
+            used_row = conn.execute(
+                "SELECT COALESCE(SUM(gpu_seconds), 0) FROM jobs "
+                "WHERE status = 'completed' AND server = ?",
+                (server["name"],)).fetchone()
+        else:
+            used_row = (0,)
         conn.close()
     used = float(used_row[0] or 0)
     return {
         "uptime_seconds": int(time.time() - START_TIME),
-        "kaggle_configured": bool(settings["username"] and settings["key"]),
+        "server": public_server(server) if server else None,
+        "kaggle_configured": bool(server and server.get("username")
+                                  and server.get("key")),
         "kaggle_reachable": reachable,
         "kaggle_error": kaggle_error,
         "quota": {"used_seconds": used, "total_seconds": WEEKLY_QUOTA_SECONDS,
@@ -1122,23 +1288,29 @@ def server_status():
 
 @app.get("/api/settings")
 def get_settings():
-    s = load_settings()
-    key = s["key"] or ""
-    if len(key) >= 8:
-        hint = "••••" + key[-4:]
-    elif key:
-        hint = "••••"
-    else:
-        hint = ""
-    return {"kaggle_configured": bool(s["username"] and key),
-            "kaggle_username": s["username"],
-            "key_saved": bool(key),
-            "key_hint": hint}
+    """設定頁要的資料：目前伺服器的用戶名、金鑰狀態（只回後 4 位）、
+    全部伺服器清單（也不含完整金鑰）。
+    kaggle_username / key_saved / key_hint 保留下來，是給目前
+    伺服器那張 Kaggle 卡片用的舊欄位。"""
+    settings = load_settings()
+    server = current_server(settings)
+    result = {
+        "kaggle_configured": bool(server and server.get("username")
+                                  and server.get("key")),
+        "current_server_id": server["id"] if server else None,
+        "servers": [public_server(s)
+                    for s in settings.get("servers") or []],
+        "kaggle_username": server["username"] if server else "",
+        "key_saved": bool(server and server.get("key")),
+        "key_hint": _key_hint(server.get("key")) if server else "",
+    }
+    return result
 
 
 @app.post("/api/settings")
 async def save_settings_endpoint(request: Request):
-    """部分更新：金鑰留空表示沿用已保存的金鑰，用戶名留空表示沿用原來的
+    """改目前伺服器的用戶名和金鑰（設定頁 Kaggle 卡片用的入口）：
+    金鑰留空表示沿用已保存的金鑰，用戶名留空表示沿用原來的
     用戶名；兩個都空才回 400。絕不回傳完整金鑰。"""
     try:
         data = await request.json()
@@ -1149,31 +1321,171 @@ async def save_settings_endpoint(request: Request):
     if not username and not key:
         return JSONResponse({"error": "沒有要改的內容，用戶名和金鑰都留空了"},
                             status_code=400)
-    current = load_settings()
-    new_username = username or current["username"]
-    new_key = key or current["key"]
-    if not new_username or not new_key:
+    settings = load_settings()
+    server = current_server(settings)
+    if server is None:
+        return JSONResponse(
+            {"error": "還沒有伺服器，請先在「伺服器」區新增一個"},
+            status_code=400)
+    if username:
+        server["username"] = username
+    if key:
+        server["key"] = key
+    if not server["username"] or not server["key"]:
         return JSONResponse(
             {"error": "用戶名和金鑰都要有，現在還缺一項，請填上"},
             status_code=400)
-    save_settings(new_username, new_key)
-    return {"ok": True, "key_saved": bool(new_key),
+    save_settings_full(settings)
+    return {"ok": True, "key_saved": bool(server["key"]),
             "key_changed": bool(key)}
 
 
 @app.post("/api/settings/test")
 def test_settings():
-    s = load_settings()
-    if not s["username"] or not s["key"]:
+    """測試目前伺服器的連線（設定頁「測試連線」按鈕）。"""
+    server = current_server()
+    if not server or not server.get("username") or not server.get("key"):
         return {"ok": False, "error": NO_KEY_TEXT}
+    credentials = {"username": server["username"], "key": server["key"]}
     try:
-        kaggle_get(s, "/kernels/list?user=" +
-                   urllib.parse.quote(s["username"], safe=""), timeout=30)
+        kaggle_get(credentials, "/kernels/list?user=" +
+                   urllib.parse.quote(server["username"], safe=""), timeout=30)
         return {"ok": True}
     except KaggleAuthError:
         return {"ok": False, "error": KEY_ERROR_TEXT}
     except KaggleError as e:
         return {"ok": False, "error": str(e)[:200]}
+
+
+# ---------------------------------------------------------------- 伺服器管理
+def _valid_dataset_ref(dataset):
+    """數據集填了就要是 owner/slug 的樣子（例如
+    xiongyong5207/qwen-image-21-models），留空表示不配。"""
+    if not dataset:
+        return True
+    parts = dataset.split("/")
+    return len(parts) == 2 and all(p.strip() for p in parts)
+
+
+@app.get("/api/servers")
+def list_servers():
+    """伺服器清單（右上角切換器與設定頁「伺服器」區共用），
+    絕不含完整金鑰。"""
+    settings = load_settings()
+    server = current_server(settings)
+    return {"current_server_id": server["id"] if server else None,
+            "servers": [public_server(s)
+                        for s in settings.get("servers") or []]}
+
+
+@app.post("/api/servers")
+async def add_server(request: Request):
+    """新增一個伺服器：名字、用戶名、金鑰都要填；數據集可留空
+    （留空就是每次跑圖都重新下載模型）。名字不能重複。"""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "請求內容不是合法的 JSON"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "請求內容不是合法的 JSON"}, status_code=400)
+    name = str(data.get("name") or "").strip()
+    username = str(data.get("username") or "").strip()
+    key = str(data.get("key") or "").strip()
+    dataset = str(data.get("dataset") or "").strip()
+    if not name:
+        return JSONResponse({"error": "請給伺服器起個名字"}, status_code=400)
+    if not username or not key:
+        return JSONResponse({"error": "用戶名和金鑰都要填"}, status_code=400)
+    if not _valid_dataset_ref(dataset):
+        return JSONResponse(
+            {"error": "數據集請填 owner/slug 的格式，"
+                      "例如 xiongyong5207/qwen-image-21-models"},
+            status_code=400)
+    settings = load_settings()
+    if any(s["name"] == name for s in settings.get("servers") or []):
+        return JSONResponse({"error": "已經有一個同名的伺服器了，請換個名字"},
+                            status_code=400)
+    srv = _new_server(name, username, key, dataset)
+    settings["servers"].append(srv)
+    if not settings.get("current_server_id"):
+        settings["current_server_id"] = srv["id"]
+    save_settings_full(settings)
+    return {"ok": True, "server": public_server(srv)}
+
+
+@app.put("/api/servers/{server_id}")
+async def update_server(server_id: str, request: Request):
+    """改一個伺服器：名字、用戶名、數據集都能改；金鑰留空表示沿用原值。
+    名字改了也不能跟別的伺服器重複。"""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "請求內容不是合法的 JSON"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "請求內容不是合法的 JSON"}, status_code=400)
+    settings = load_settings()
+    srv = find_server(settings, server_id)
+    if not srv:
+        return JSONResponse({"error": "找不到這個伺服器"}, status_code=404)
+    name = str(data.get("name") or "").strip()
+    username = str(data.get("username") or "").strip()
+    key = str(data.get("key") or "").strip()
+    dataset = str(data.get("dataset") or "").strip()
+    if name and name != srv["name"] and any(
+            s["name"] == name for s in settings.get("servers") or []):
+        return JSONResponse({"error": "已經有一個同名的伺服器了，請換個名字"},
+                            status_code=400)
+    if not _valid_dataset_ref(dataset):
+        return JSONResponse(
+            {"error": "數據集請填 owner/slug 的格式，"
+                      "例如 xiongyong5207/qwen-image-21-models"},
+            status_code=400)
+    if name:
+        srv["name"] = name
+    if username:
+        srv["username"] = username
+    if key:
+        srv["key"] = key
+    if "dataset" in data:
+        srv["dataset"] = dataset
+    if not srv["username"] or not srv["key"]:
+        return JSONResponse({"error": "用戶名和金鑰都要有，現在還缺一項"},
+                            status_code=400)
+    save_settings_full(settings)
+    return {"ok": True, "server": public_server(srv)}
+
+
+@app.delete("/api/servers/{server_id}")
+def delete_server(server_id: str):
+    """刪一個伺服器：至少要保留一個。刪掉的是目前伺服器，
+    就把目前切到剩下的第一個。已跑過的任務記錄不受影響，
+    只是以後新任務不會再用這個伺服器跑。"""
+    settings = load_settings()
+    if len(settings.get("servers") or []) <= 1:
+        return JSONResponse({"error": "至少要保留一個伺服器，不能全刪掉"},
+                            status_code=400)
+    srv = find_server(settings, server_id)
+    if not srv:
+        return JSONResponse({"error": "找不到這個伺服器"}, status_code=404)
+    settings["servers"] = [s for s in settings["servers"]
+                           if s["id"] != server_id]
+    if settings.get("current_server_id") == server_id:
+        settings["current_server_id"] = settings["servers"][0]["id"]
+    save_settings_full(settings)
+    return {"ok": True}
+
+
+@app.post("/api/servers/{server_id}/activate")
+def activate_server(server_id: str):
+    """把某個伺服器設為目前伺服器：之後的新任務都用它提交，
+    額度與狀態顯示也跟著換。"""
+    settings = load_settings()
+    srv = find_server(settings, server_id)
+    if not srv:
+        return JSONResponse({"error": "找不到這個伺服器"}, status_code=404)
+    settings["current_server_id"] = server_id
+    save_settings_full(settings)
+    return {"ok": True, "server": public_server(srv)}
 
 
 @app.api_route("/api/{rest:path}",

@@ -30,6 +30,11 @@ v2.4: 支援參考生圖（官方 Qwen-Image-2.1 編輯工作流）與面板選�
 （尺寸、比例、種子、步數、CFG、參考強度）。提示詞與選項由工作台後端
 注入模板裡的兩個佔位符，工作流由 build_workflow() 按選項拼出；
 純文字模式仍走原來的 v4 工作流。
+v2.5: 數據集模式——內核提交時掛上 Kaggle 數據集
+（xiongyong5207/qwen-image-21-models），模型檔直接從掛載目錄讀，
+不用再下載 14.23GB。ComfyUI 用 extra_model_paths.yaml 指到掛載
+目錄（官方機制），工作流本身一個節點都不用改；沒配數據集的
+伺服器走老路（下載）。掛載路徑不寫死，按檔名遞迴找。
 """
 import glob
 import json
@@ -192,6 +197,43 @@ def build_workflow(opts, prompt):
     return workflow
 
 
+# 數據集模式用的小工具（v2.5）。放在這裡是為了讓測試能單獨抽出來測，
+# 不要把這些邏輯寫進第 3 步的主流程裡。
+DATASET_SEARCH_ROOT = "/kaggle/input"
+
+
+def find_dataset_file(name, expected_size, root=DATASET_SEARCH_ROOT):
+    """在掛載的數據集裡按檔名找一個模型檔（遞迴找），並核對大小。
+    找不到、大小不對就直接報錯停掉，不要默默掉回下載：那會燒掉
+    一次下載的時間，還讓人以為用了緩存。"""
+    hits = glob.glob(os.path.join(root, "**", name), recursive=True)
+    if not hits:
+        raise SystemExit(
+            f"DATASET MISSING {name}：數據集裡找不到這個檔，"
+            "請檢查伺服器的數據集設定")
+    path = hits[0]
+    got = os.path.getsize(path)
+    if got != expected_size:
+        raise SystemExit(
+            f"DATASET SIZE MISMATCH {name}：got {got}，expected {expected_size}")
+    return path
+
+
+def write_extra_model_paths(comfy_root, category_paths):
+    """寫 ComfyUI 的 extra_model_paths.yaml，讓三類模型指向數據集
+    掛載目錄。category_paths 是 {類別: 檔案完整路徑}，
+    類別是 diffusion_models / text_encoders / vae。
+    ComfyUI 啟動時會讀這個檔案（官方機制），工作流不用改。"""
+    lines = ["comfyui:"]
+    for category in ("diffusion_models", "text_encoders", "vae"):
+        lines.append(
+            f"    {category}: {os.path.dirname(category_paths[category])}")
+    yaml_path = os.path.join(comfy_root, "extra_model_paths.yaml")
+    with open(yaml_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    return yaml_path
+
+
 # 1. Hardware check (v2: tolerant). Print the real GPU, RAM, disk.
 # Do not assume T4 x2, and NEVER exit here: a diagnostic failure must
 # not kill the test. Record everything into hardware.json in /kaggle/working
@@ -243,35 +285,72 @@ if not os.path.isdir(gguf_node):
 run([sys.executable, "-m", "pip", "install", "-q", "gguf", "aria2"])
 log("ComfyUI + ComfyUI-GGUF installed")
 
-# 3. Download the 3 files to scratch. One quantisation only, no BF16.
-log("== 3. download models to scratch ==")
-FILES = [
-    ("https://huggingface.co/unsloth/Qwen-Image-2.1-GGUF/resolve/main/qwen-image-2.1-Q4_K_M.gguf",
-     f"{COMFY}/models/diffusion_models/qwen-image-2.1-Q4_K_M.gguf",
-     4199565024),
-    ("https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
-     f"{COMFY}/models/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
-     9350798360),
-    ("https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
-     f"{COMFY}/models/vae/qwen_image_2.1_vae_bf16.safetensors",
-     675509688),
+# 3. 模型：有數據集就用掛載的，沒數據集就下載（老路）。
+#    數據集模式（v2.5）：內核提交時掛上 Kaggle 數據集，模型檔就在
+#    /kaggle/input 底下，不用再下載 14.23GB。ComfyUI 用
+#    extra_model_paths.yaml 指到掛載目錄（官方機制），工作流本身
+#    一個節點都不用改。掛載路徑不寫死：按檔名遞迴找（可能是
+#    /kaggle/input/<slug>/，也可能是 /kaggle/input/datasets/<owner>/<slug>/）。
+#    找不到檔、大小不對就直接停掉，不要默默掉回下載——那會燒掉
+#    一次下載的時間，還讓人以為用了緩存。
+log("== 3. models: dataset mount or download ==")
+USE_DATASET = bool(OPTS.get("use_dataset"))
+DATASET_FILES = [
+    ("qwen-image-2.1-Q4_K_M.gguf", 4199565024, "diffusion_models"),
+    ("qwen3vl_8b_int8_convrot.safetensors", 9350798360, "text_encoders"),
+    ("qwen_image_2.1_vae_bf16.safetensors", 675509688, "vae"),
 ]
-for url, dest, expected in FILES:
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    if os.path.exists(dest) and os.path.getsize(dest) == expected:
-        log(f"already present, size OK: {dest}")
-        continue
-    # v4 fix: aria2c -o is a bare filename, NOT a full path. Passing the
-    # full path as -o made aria2 write to /kaggle/working/<full path>
-    # (v3: file landed at /kaggle/working/kaggle/tmp/... and the
-    # getsize check on the absolute path then raised FileNotFoundError).
-    # Use -d <dir> -o <basename> instead.
-    run(["aria2c", "-x", "8", "-s", "8", "-c",
-         "-d", os.path.dirname(dest), "-o", os.path.basename(dest), url])
-    got = os.path.getsize(dest)
-    log(f"downloaded {dest} size={got} expected={expected}")
-    if got != expected:
-        raise SystemExit(f"SIZE MISMATCH {dest}: got {got}, expected {expected}")
+dataset_info = {"use_dataset": USE_DATASET, "files_downloaded_bytes": 0}
+if USE_DATASET:
+    t_locate = time.time()
+    found = {}
+    for name, expected, category in DATASET_FILES:
+        path = find_dataset_file(name, expected)
+        found[category] = path
+        log(f"dataset file OK: {name} -> {path} "
+            f"({os.path.getsize(path)} bytes)")
+    dataset_info["dataset_locate_seconds"] = round(time.time() - t_locate, 1)
+    # 首次讀探針：各讀 1MB，量掛載目錄第一次讀要多久（FUSE 冷緩存
+    # 的代價）；模型完整載入發生在生圖時，算在 generation_seconds 裡。
+    t_read = time.time()
+    for name, expected, category in DATASET_FILES:
+        with open(found[category], "rb") as f:
+            f.read(1024 * 1024)
+    dataset_info["dataset_first_read_seconds"] = round(time.time() - t_read, 1)
+    yaml_path = write_extra_model_paths(COMFY, found)
+    dataset_info["dataset_bytes"] = 14225873072
+    log(f"dataset ready: locate {dataset_info['dataset_locate_seconds']}s + "
+        f"first-read {dataset_info['dataset_first_read_seconds']}s; "
+        f"extra_model_paths.yaml -> {yaml_path}")
+else:
+    FILES = [
+        ("https://huggingface.co/unsloth/Qwen-Image-2.1-GGUF/resolve/main/qwen-image-2.1-Q4_K_M.gguf",
+         f"{COMFY}/models/diffusion_models/qwen-image-2.1-Q4_K_M.gguf",
+         4199565024),
+        ("https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+         f"{COMFY}/models/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+         9350798360),
+        ("https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+         f"{COMFY}/models/vae/qwen_image_2.1_vae_bf16.safetensors",
+         675509688),
+    ]
+    for url, dest, expected in FILES:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if os.path.exists(dest) and os.path.getsize(dest) == expected:
+            log(f"already present, size OK: {dest}")
+            continue
+        # v4 fix: aria2c -o is a bare filename, NOT a full path. Passing the
+        # full path as -o made aria2 write to /kaggle/working/<full path>
+        # (v3: file landed at /kaggle/working/kaggle/tmp/... and the
+        # getsize check on the absolute path then raised FileNotFoundError).
+        # Use -d <dir> -o <basename> instead.
+        run(["aria2c", "-x", "8", "-s", "8", "-c",
+             "-d", os.path.dirname(dest), "-o", os.path.basename(dest), url])
+        got = os.path.getsize(dest)
+        log(f"downloaded {dest} size={got} expected={expected}")
+        if got != expected:
+            raise SystemExit(f"SIZE MISMATCH {dest}: got {got}, expected {expected}")
+    dataset_info["files_downloaded_bytes"] = 14225873072
 
 # 4. Start ComfyUI headless with the T4 flags verified on real T4s.
 # --force-fp16 and --disable-comfy-compiler are NOT optional on Turing:
@@ -367,16 +446,20 @@ try:
     from PIL import Image
     im = Image.open(dst)
     log(f"saved {dst} size={os.path.getsize(dst)} bytes dimensions={im.size} mode={im.mode}")
+    summary = {
+        "prompt_id": prompt_id,
+        "generation_seconds": round(time.time() - gen_start, 1),
+        "total_seconds": round(time.time() - START, 1),
+        "output_file": "qwen_test_chufeng.png",
+        "output_bytes": os.path.getsize(dst),
+        "dimensions": list(im.size),
+    }
+    # 數據集模式的耗時也寫進去，第一次真跑時就能量出到底省了多少：
+    # dataset_locate_seconds（找檔）、dataset_first_read_seconds
+    # （首次讀 1MB 探針）、files_downloaded_bytes（數據集模式是 0）。
+    summary.update(dataset_info)
     with open(os.path.join(WORK, "test_summary.json"), "w") as f:
-        json.dump({
-            "prompt_id": prompt_id,
-            "generation_seconds": round(time.time() - gen_start, 1),
-            "total_seconds": round(time.time() - START, 1),
-            "output_file": "qwen_test_chufeng.png",
-            "output_bytes": os.path.getsize(dst),
-            "dimensions": list(im.size),
-            "files_downloaded_bytes": 14225873072,
-        }, f, indent=2)
+        json.dump(summary, f, indent=2)
     log("== DONE ==")
 finally:
     proc.terminate()
