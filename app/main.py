@@ -559,14 +559,34 @@ def list_jobs(server_name=None):
     return [_row_to_job(r) for r in rows]
 
 
-def next_queued_job():
+def next_queued_job(server_name=None):
+    """取下一個排隊的任務。server_name 給了就只取那個伺服器的，
+    不給就取全部裡面最早的一個（舊的單線程用法，現已不用）。"""
     with DB_LOCK:
         conn = _conn()
-        row = conn.execute(
-            "SELECT * FROM jobs WHERE status = 'queued' "
-            "ORDER BY created_at ASC LIMIT 1").fetchone()
+        if server_name:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE status = 'queued' AND server = ? "
+                "ORDER BY created_at ASC LIMIT 1", (server_name,)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE status = 'queued' "
+                "ORDER BY created_at ASC LIMIT 1").fetchone()
         conn.close()
     return _row_to_job(row) if row else None
+
+
+def reset_running_jobs():
+    """啟動時把卡在 running 的任務打回 queued，讓 worker 重新跑。
+    容器重啟時正在跑的任務會被丟下（worker 線程跟著容器一起死），
+    不打回來它就永遠卡在 running，誰也不會再碰它。"""
+    with DB_LOCK:
+        conn = _conn()
+        cur = conn.execute(
+            "UPDATE jobs SET status = 'queued' WHERE status = 'running'")
+        conn.commit()
+        conn.close()
+    return cur.rowcount
 
 
 def update_job(job_id, **fields):
@@ -908,8 +928,65 @@ def run_job(job):
         fail_job(job_id, "後端內部錯誤，請稍後再試一次")
 
 
+def worker_loop_for_server(server_id):
+    """一個伺服器一個 worker 線程：只跑這個伺服器的排隊任務，
+    跑完一個再拿下一個；沒任務就睡 5 秒。伺服器被刪了就退出。"""
+    while True:
+        try:
+            settings = load_settings()
+            server = find_server(settings, server_id)
+            if not server:
+                return
+            job = next_queued_job(server.get("name"))
+            if job:
+                run_job(job)
+            else:
+                time.sleep(5)
+        except Exception:
+            traceback.print_exc()
+            time.sleep(5)
+
+
+# 各伺服器 worker 線程的登記表：server_id -> Thread。
+_WORKER_THREADS = {}
+_WORKER_THREADS_LOCK = threading.Lock()
+
+
+def ensure_workers():
+    """確保每個伺服器都有一個活著的 worker 線程。
+    新加的伺服器會在這裡被發現並啟動 worker；已死的線程會重啟；
+    被刪的伺服器其 worker 會自己退出，這裡不再管它。"""
+    try:
+        settings = load_settings()
+    except Exception:
+        return
+    with _WORKER_THREADS_LOCK:
+        for server in settings.get("servers") or []:
+            sid = server.get("id")
+            if not sid:
+                continue
+            t = _WORKER_THREADS.get(sid)
+            if t is not None and t.is_alive():
+                continue
+            t = threading.Thread(target=worker_loop_for_server,
+                                 args=(sid,), daemon=True)
+            t.start()
+            _WORKER_THREADS[sid] = t
+
+
+def supervisor_loop():
+    """監管線程：每 30 秒檢查一次，確保每個伺服器都有 worker。"""
+    while True:
+        try:
+            ensure_workers()
+        except Exception:
+            traceback.print_exc()
+        time.sleep(30)
+
+
 def worker_loop():
-    """後台執行緒：一次只跑一個任務，後面的排隊等。"""
+    """舊的單線程 worker（v2.9 以前用），現已不用，留著只是避免
+    外部引用斷掉；真正跑任務的是每伺服器一個的 worker 線程。"""
     while True:
         try:
             job = next_queued_job()
@@ -926,7 +1003,14 @@ def worker_loop():
 @asynccontextmanager
 async def lifespan(app):
     init_db()
-    t = threading.Thread(target=worker_loop, daemon=True)
+    # 容器重啟時，把上次卡在 running 的任務打回 queued，讓 worker 重跑；
+    # 否則它們永遠卡在 running，誰也不會再碰。
+    try:
+        reset_running_jobs()
+    except Exception:
+        traceback.print_exc()
+    # 監管線程每 30 秒確保每個伺服器都有一個 worker 在跑任務。
+    t = threading.Thread(target=supervisor_loop, daemon=True)
     t.start()
     yield
 
