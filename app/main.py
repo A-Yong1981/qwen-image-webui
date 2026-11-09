@@ -543,11 +543,18 @@ def get_job(job_id):
     return _row_to_job(row) if row else None
 
 
-def list_jobs():
+def list_jobs(server_name=None):
+    """列出任務。server_name 給了就只列那個伺服器的任務，
+    不給（或給 'all'）就列全部——歷史頁的篩選就靠這個。"""
     with DB_LOCK:
         conn = _conn()
-        rows = conn.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
+        if server_name and server_name != "all":
+            rows = conn.execute(
+                "SELECT * FROM jobs WHERE server = ? "
+                "ORDER BY created_at DESC", (server_name,)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
         conn.close()
     return [_row_to_job(r) for r in rows]
 
@@ -1132,8 +1139,10 @@ async def create_job_with_refs(request: Request):
 
 
 @app.get("/api/jobs")
-def list_jobs_endpoint():
-    return list_jobs()
+def list_jobs_endpoint(server: str = ""):
+    """歷史任務清單。?server=<伺服器名字> 只列那個伺服器的，
+    不帶或帶 all 就列全部。前端歷史頁的篩選就用這個參數。"""
+    return list_jobs(server or None)
 
 
 @app.get("/api/jobs/{job_id}")
@@ -1317,19 +1326,40 @@ def server_status():
     目前伺服器的額度、任務統計、進行中與最近完成的任務。"""
     server = current_server()
     reachable, kaggle_error = _kaggle_reachable()
+    # 狀態數字只算目前這個伺服器的任務，別的伺服器不混進來——
+    # 之前是全庫一起算，切換伺服器後排隊/進行中數字不對。
+    server_name = server["name"] if server else None
     with DB_LOCK:
         conn = _conn()
-        counts = {}
-        for row in conn.execute(
-                "SELECT status, COUNT(*) AS n FROM jobs GROUP BY status"):
-            counts[row["status"]] = row["n"]
-        running = conn.execute(
-            "SELECT * FROM jobs WHERE status IN ('running', 'queued') "
-            "ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END, "
-            "created_at ASC LIMIT 1").fetchone()
-        last = conn.execute(
-            "SELECT * FROM jobs WHERE finished_at IS NOT NULL "
-            "ORDER BY finished_at DESC LIMIT 1").fetchone()
+        if server_name:
+            counts = {}
+            for row in conn.execute(
+                    "SELECT status, COUNT(*) AS n FROM jobs "
+                    "WHERE server = ? GROUP BY status",
+                    (server_name,)):
+                counts[row["status"]] = row["n"]
+            running = conn.execute(
+                "SELECT * FROM jobs WHERE server = ? "
+                "AND status IN ('running', 'queued') "
+                "ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END, "
+                "created_at ASC LIMIT 1", (server_name,)).fetchone()
+            last = conn.execute(
+                "SELECT * FROM jobs WHERE server = ? "
+                "AND finished_at IS NOT NULL "
+                "ORDER BY finished_at DESC LIMIT 1",
+                (server_name,)).fetchone()
+        else:
+            counts = {}
+            for row in conn.execute(
+                    "SELECT status, COUNT(*) AS n FROM jobs GROUP BY status"):
+                counts[row["status"]] = row["n"]
+            running = conn.execute(
+                "SELECT * FROM jobs WHERE status IN ('running', 'queued') "
+                "ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END, "
+                "created_at ASC LIMIT 1").fetchone()
+            last = conn.execute(
+                "SELECT * FROM jobs WHERE finished_at IS NOT NULL "
+                "ORDER BY finished_at DESC LIMIT 1").fetchone()
         if server:
             used_row = conn.execute(
                 "SELECT COALESCE(SUM(gpu_seconds), 0) FROM jobs "

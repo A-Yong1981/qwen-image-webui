@@ -476,6 +476,23 @@ code {
 .history-head h2 { margin: 0; }
 .history-head button { margin-top: 0; }
 
+.history-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.history-filter select {
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(10, 138, 104, 0.25);
+  background: #fff;
+  font-size: 14px;
+}
+
 .history { display: grid; gap: 12px; margin-top: 12px; }
 
 .job-card {

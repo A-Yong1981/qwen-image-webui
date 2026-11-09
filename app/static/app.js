@@ -18,6 +18,9 @@ let refreshTimer = null;
 let servers = [];
 let currentServerId = null;
 let editingServerId = null;
+// 歷史頁的伺服器篩選：預設跟著目前伺服器走（只看這個伺服器的任務），
+// 選 "all" 可以兩個伺服器一起看。切換伺服器時自動跟著切。
+let historyServerFilter = "current";
 
 function $(id) {
   return document.getElementById(id);
@@ -267,6 +270,7 @@ async function loadServers() {
       });
     }
     renderServerList();
+    renderHistoryFilter();
   } catch (e) {
     // 暫時連不上就等下一次刷新。
   }
@@ -325,6 +329,8 @@ async function activateServer(id) {
   }
   $("serverMsg").textContent = `已切換到「${data.server.name}」，之後的新任務都用它跑。`;
   currentServerId = data.server.id;
+  // 切換伺服器後，歷史篩選跟著切到新伺服器，狀態數字也跟著換。
+  historyServerFilter = "current";
   await loadSettings();
   await loadServers();
   await loadQuota();
@@ -424,6 +430,12 @@ async function deleteServer(s) {
 $("serverSelect").addEventListener("change", () => {
   const id = $("serverSelect").value;
   if (id) activateServer(id);
+});
+
+// ---- 歷史記錄：按伺服器篩選 ----
+$("historyServerFilter").addEventListener("change", () => {
+  historyServerFilter = $("historyServerFilter").value;
+  refreshJobs();
 });
 
 // ---- 設定：修改密碼 ----
@@ -959,9 +971,56 @@ $("reusePromptBtn").addEventListener("click", () => {
 });
 
 // ---- 刷新 ----
+function currentServerName() {
+  const cur = servers.find((x) => x.id === currentServerId);
+  return cur ? cur.name : null;
+}
+
+function historyFilterValue() {
+  // "current" = 只看目前伺服器；"all" = 全部；其他 = 指定伺服器名字。
+  if (historyServerFilter === "all") return "all";
+  if (historyServerFilter === "current") return currentServerName() || "all";
+  return historyServerFilter;
+}
+
+function renderHistoryFilter() {
+  const sel = $("historyServerFilter");
+  if (!sel) return;
+  const cur = currentServerName();
+  const prev = sel.value;
+  sel.innerHTML = "";
+  const optCur = document.createElement("option");
+  optCur.value = "current";
+  optCur.textContent = cur ? `目前伺服器（${cur}）` : "目前伺服器";
+  sel.appendChild(optCur);
+  servers.forEach((s) => {
+    const opt = document.createElement("option");
+    opt.value = s.name;
+    opt.textContent = s.name;
+    sel.appendChild(opt);
+  });
+  const optAll = document.createElement("option");
+  optAll.value = "all";
+  optAll.textContent = "全部伺服器";
+  sel.appendChild(optAll);
+  // 盡量保持使用者上次的選擇；切換伺服器後預設回到「目前伺服器」。
+  if (historyServerFilter === "current" || historyServerFilter === "all" ||
+      servers.some((s) => s.name === historyServerFilter)) {
+    sel.value = historyServerFilter;
+  } else {
+    sel.value = "current";
+    historyServerFilter = "current";
+  }
+  if (prev !== sel.value) refreshJobs();
+}
+
 async function refreshJobs() {
   try {
-    const r = await fetch("/api/jobs");
+    const filter = historyFilterValue();
+    const url = filter && filter !== "all"
+      ? `/api/jobs?server=${encodeURIComponent(filter)}`
+      : "/api/jobs";
+    const r = await fetch(url);
     if (r.status === 401) { showLogin(); return; }
     jobs = await r.json();
     renderCurrentJob();

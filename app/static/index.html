@@ -146,9 +146,12 @@
   <section id="tab-history" class="panel">
     <div class="history-head">
       <h2>歷史記錄</h2>
+      <label class="history-filter">伺服器
+        <select id="historyServerFilter"></select>
+      </label>
       <button id="clearHistoryBtn" class="btn-danger" type="button">清空歷史</button>
     </div>
-    <p class="note">點一條記錄，會在「生圖」頁右邊的預覽區顯示大圖和提示詞。每條記錄都留著你當時輸入的原始提示詞。</p>
+    <p class="note">點一條記錄，會在「生圖」頁右邊的預覽區顯示大圖和提示詞。每條記錄都留著你當時輸入的原始提示詞。篩選預設只看目前這個伺服器，選「全部伺服器」可以兩個一起看。</p>
     <p id="historyMsg" class="msg"></p>
     <div id="historyList" class="history"></div>
   </section>
