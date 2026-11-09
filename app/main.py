@@ -641,6 +641,15 @@ def _aspect_label(width, height):
     return "自定"
 
 
+def _translate_image_refs(prompt):
+    """把提示詞裡「图片1」「圖片1」「图1」「圖1」轉成 <image1>（類推到 4），
+    讓模型正確對上第幾張參考圖。已帶括號的 <image1> 不動。"""
+    prompt = re.sub(r'(?:圖片|图片|圖|图)\s*([1-4])', r'<image\1>', prompt)
+    prompt = re.sub(r'(?<!<)image\s*([1-4])(?!>)', r'<image\1>', prompt,
+                    flags=re.IGNORECASE)
+    return prompt
+
+
 def _normalize_options(raw, ref_count=None, ref_urls=None):
     """把前端傳來的選項整理成一份完整的記錄。
 
@@ -666,7 +675,6 @@ def _normalize_options(raw, ref_count=None, ref_urls=None):
                           secrets.randbelow(10 ** 15))
     steps = _clamp_int(raw.get("steps"), 10, 50, 20)
     cfg = _clamp_float(raw.get("cfg"), 1.0, 4.0, 1.0)
-    ref_strength = _clamp_float(raw.get("ref_strength"), 0.0, 1.0, 0.7)
     return {
         "mode": mode,
         "ref_count": int(ref_count if ref_count is not None
@@ -679,7 +687,6 @@ def _normalize_options(raw, ref_count=None, ref_urls=None):
         "seed": seed,
         "steps": steps,
         "cfg": cfg,
-        "ref_strength": ref_strength,
         # 這個任務要不要掛數據集（由建立時選中的伺服器決定，
         # 有配數據集才 True）；內核腳本第 3 步看這個值分流。
         "use_dataset": bool(raw.get("use_dataset")),
@@ -713,6 +720,8 @@ def _public_base_url(request):
 # ---------------------------------------------------------------- 核心腳本
 def build_kernel_script(prompt, options=None):
     """把使用者提示詞與生圖選項注入模板。json.dumps 轉義，絕不用字串拼接。"""
+    # 提示詞裡「图片1」自動轉成 <image1>，模型才認得第幾張參考圖。
+    prompt = _translate_image_refs(prompt)
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
     if template.count("__USER_PROMPT_JSON__") != 1:
         raise RuntimeError("核心腳本模板佔位符異常")

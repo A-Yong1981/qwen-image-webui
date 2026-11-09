@@ -57,7 +57,7 @@
         <div id="refArea" class="hidden">
           <label for="refInput">參考圖</label>
           <input id="refInput" type="file" accept="image/jpeg,image/png,image/webp">
-          <p class="note" id="refHelp">只選 1 張圖（jpg、png、webp，每張不超過 10MB）。這張圖決定出圖的底子，會按你選的尺寸先縮好。</p>
+          <p class="note" id="refHelp">只選 1 張圖（jpg、png、webp，每張不超過 10MB）。這張圖就是場景／畫布，會按你選的尺寸先縮好。</p>
           <p id="refCount" class="note"></p>
           <div id="refThumbs" class="ref-thumbs"></div>
         </div>
@@ -65,6 +65,7 @@
         <label for="prompt" id="promptLabel">生圖要求（中文就可以，直接寫你想要的畫面）</label>
         <textarea id="prompt" rows="3" maxlength="2000"
           placeholder="例如：白天的小電腦店門面，招牌寫著 CHUFENG，櫥窗裡有一台桌上型電腦"></textarea>
+        <p class="note">寫 &lt;image1&gt;、&lt;image2&gt; 指第幾張參考圖（寫「图片1」也會自動幫你轉）。</p>
 
         <label for="aspect">畫面比例</label>
         <select id="aspect">
@@ -108,15 +109,6 @@
           </div>
         </div>
         <p class="note">步數是模型細化的次數（預設 20，越多越細、越慢）；引導係數是模型有多聽你的話（預設 1.0 最自然）。建議：兩個都不用動。</p>
-
-        <div id="refStrengthRow" class="hidden">
-          <label for="refStrength">參考強度</label>
-          <div class="row">
-            <input id="refStrength" type="range" min="0" max="1" step="0.05" value="0.7">
-            <span id="refStrengthVal" class="range-val">0.70</span>
-          </div>
-          <p class="note">參考強度就是出圖保留多少原圖的樣子，越大越像原圖。預設 0.7：原圖留七成、按要求改三成；想改多一點就往小調。</p>
-        </div>
 
         <p class="note">採樣器固定用已驗證的組合（euler / simple），不用改。</p>
 

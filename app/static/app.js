@@ -506,8 +506,8 @@ const MODE_HELP = {
   multi: "上傳 2 到 4 張參考圖，再寫一句話告訴模型怎麼組合它們。在要求裡用 <image1>、<image2> 指第幾張圖，例如：把 <image1> 裡的人放到 <image2> 的海灘上。",
 };
 const REF_HELP = {
-  single: "只選 1 張圖（jpg、png、webp，每張不超過 10MB）。這張圖決定出圖的底子，會按你選的尺寸先縮好。",
-  multi: "最多選 4 張圖（jpg、png、webp，每張不超過 10MB）。第一張圖決定出圖的底子，後面的圖提供內容（比如衣服、姿勢、背景）。",
+  single: "只選 1 張圖（jpg、png、webp，每張不超過 10MB）。這張圖就是場景／畫布，會按你選的尺寸先縮好。",
+  multi: "最多選 4 張圖（jpg、png、webp，每張不超過 10MB）。第 1 張是場景／畫布（要被編輯的那張圖），第 2 張起是提供內容的參考圖（例如人物、衣服）。",
 };
 const MODE_LABEL = { t2i: "純文字生圖", single: "單圖參考", multi: "多圖參考" };
 let genMode = "t2i";
@@ -533,10 +533,6 @@ function fmtOptionsFull(opts) {
   if (opts.seed !== undefined && opts.seed !== null) parts.push(`種子 ${opts.seed}`);
   if (opts.steps) parts.push(`${opts.steps} 步`);
   if (opts.cfg !== undefined && opts.cfg !== null) parts.push(`CFG ${opts.cfg}`);
-  if (opts.mode && opts.mode !== "t2i" &&
-      opts.ref_strength !== undefined && opts.ref_strength !== null) {
-    parts.push(`參考強度 ${opts.ref_strength}`);
-  }
   return parts.join(" · ");
 }
 
@@ -548,7 +544,6 @@ function setMode(mode) {
   $("modeHelp").textContent = MODE_HELP[mode];
   const isRef = mode !== "t2i";
   $("refArea").classList.toggle("hidden", !isRef);
-  $("refStrengthRow").classList.toggle("hidden", !isRef);
   if (isRef) {
     $("refHelp").textContent = REF_HELP[mode];
     $("refInput").multiple = mode === "multi";
@@ -642,10 +637,6 @@ $("randomSeedBtn").addEventListener("click", () => {
   $("seed").value = String(Math.floor(Math.random() * 1e15));
 });
 
-$("refStrength").addEventListener("input", () => {
-  $("refStrengthVal").textContent = Number($("refStrength").value).toFixed(2);
-});
-
 function collectOptions() {
   return {
     mode: genMode,
@@ -655,7 +646,6 @@ function collectOptions() {
     seed: $("seed").value.trim(),
     steps: $("steps").value,
     cfg: $("cfg").value,
-    ref_strength: $("refStrength").value,
   };
 }
 
@@ -700,7 +690,6 @@ $("generateBtn").addEventListener("click", async () => {
     form.append("seed", options.seed);
     form.append("steps", options.steps);
     form.append("cfg", options.cfg);
-    form.append("ref_strength", options.ref_strength);
     refFiles.forEach((f) => form.append("refs", f, f.name));
     r = await fetch("/api/jobs/with-refs", { method: "POST", body: form });
   }
@@ -962,10 +951,6 @@ $("reusePromptBtn").addEventListener("click", () => {
   if (opts.seed !== undefined && opts.seed !== null) $("seed").value = opts.seed;
   if (opts.steps) $("steps").value = opts.steps;
   if (opts.cfg !== undefined && opts.cfg !== null) $("cfg").value = opts.cfg;
-  if (opts.ref_strength !== undefined && opts.ref_strength !== null) {
-    $("refStrength").value = opts.ref_strength;
-    $("refStrengthVal").textContent = Number(opts.ref_strength).toFixed(2);
-  }
   if (opts.mode && opts.mode !== "t2i") {
     $("generateMsg").textContent = "已帶回上次的設定，參考圖請重新上傳。";
   }

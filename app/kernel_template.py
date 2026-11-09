@@ -111,8 +111,10 @@ def build_workflow(opts, prompt):
     LoadImage -> TextEncodeQwenImage21（images.image_N + VAE），
     image_1 的 latent 決定畫布；QwenImage21Cache 接在模型與採樣器之間；
     提示詞裡用 <image1>、<image2> 指第幾張參考圖。
-    官方工作流沒有「參考強度」這個參數，這裡用採樣器的 denoise 實現：
-    denoise = 1 - 強度，強度越大越像原圖（預設 0.7 -> denoise 0.3）。
+    官方工作流 KSampler denoise 固定為 1.0。TextEncodeQwenImage21 的 latent
+    是全零空 latent，必須完整去噪才能成圖；denoise < 1.0 會出噪點。
+    官方沒有「參考強度」參數，參考圖的影響來自文字編碼器的條件，
+    不是 denoise。
     出圖檔名固定是 qwen_test_chufeng，後端按這個名字取圖，兩種模式一樣。"""
     mode = str(opts.get("mode") or "t2i").strip()
     if mode == "text":
@@ -165,8 +167,6 @@ def build_workflow(opts, prompt):
         raise ValueError(f"單圖參考必須恰好 1 張參考圖，拿到 {ref_count} 張")
     if mode == "multi" and not (1 <= ref_count <= 4):
         raise ValueError(f"多圖參考必須是 1–4 張參考圖，拿到 {ref_count} 張")
-    strength = float(opts.get("ref_strength", 0.7))
-    denoise = round(1.0 - max(0.0, min(1.0, strength)), 4)
     encode_inputs = {
         "clip": ["2", 0],
         "vae": ["3", 0],
@@ -190,7 +190,7 @@ def build_workflow(opts, prompt):
                          "negative": ["4", 1], "latent_image": ["4", 2],
                          "seed": seed, "steps": steps, "cfg": cfg,
                          "sampler_name": "euler", "scheduler": "simple",
-                         "denoise": denoise}},
+                         "denoise": 1.0}},
         "7": {"class_type": "VAEDecode",
               "inputs": {"samples": ["6", 0], "vae": ["3", 0]}},
         "8": {"class_type": "SaveImage",
@@ -457,8 +457,7 @@ try:
                                Image.LANCZOS)
             im.save(local, "JPEG", quality=92)
             log(f"ref {i} saved: {local} size={im.size}")
-        log(f"denoise={1.0 - float(OPTS.get('ref_strength', 0.7)):.2f} "
-            f"(參考強度 {float(OPTS.get('ref_strength', 0.7)):.2f})")
+        log(f"denoise=1.00 (官方固定值)")
     workflow = build_workflow(OPTS, PROMPT)
     body = json.dumps({"prompt": workflow}).encode()
     req = urllib.request.Request(
