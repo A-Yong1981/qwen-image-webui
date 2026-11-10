@@ -77,6 +77,10 @@
             <textarea id="structuredPrompt" rows="6" maxlength="4000"
               placeholder="點上面「導演級擴寫」生成，或直接在這裡寫最終提示詞"></textarea>
             <p class="note">生圖提交這裡的內容；沒擴寫就直接用上面初稿。本地擴寫，不用聯網、不花額度。</p>
+            <label for="negativePrompt">負面提示詞（不要出現的東西，可留空）</label>
+            <input id="negativePrompt" type="text" maxlength="500"
+              placeholder="例如：blurry, low quality, distorted, extra limbs, watermark">
+            <p class="note">留空用預設；點「導演級擴寫」會自動填一組。畫面有招牌文字時不要填 text。</p>
             <p id="keyWarning" class="warn hidden">還沒設定 Kaggle 金鑰，請先去「設定」頁填寫用戶名和金鑰。</p>
             <p id="generateMsg" class="msg"></p>
           </div>
@@ -185,7 +189,7 @@
         <h3>Kaggle 金鑰設定（目前伺服器）</h3>
         <p id="currentServerNote" class="note"></p>
         <label for="kaggleUser">Kaggle 用戶名</label>
-        <input id="kaggleUser" type="text" autocomplete="off" placeholder="例如：xiongyong5207">
+        <input id="kaggleUser" type="text" autocomplete="off" placeholder="請輸入 Kaggle 用戶名">
         <label for="kaggleKey">Kaggle 長期 API 金鑰</label>
         <input id="kaggleKey" type="password" autocomplete="off" placeholder="貼上 kaggle.json 裡的 key">
         <p id="keySavedNote" class="note"></p>
@@ -227,11 +231,11 @@
         <label for="serverName">名字</label>
         <input id="serverName" type="text" autocomplete="off" placeholder="例如：主号、小号">
         <label for="serverUser">Kaggle 用户名</label>
-        <input id="serverUser" type="text" autocomplete="off" placeholder="例如：xiongyong5207">
+        <input id="serverUser" type="text" autocomplete="off" placeholder="請輸入 Kaggle 用戶名">
         <label for="serverKey">Kaggle 长期 API 金钥</label>
         <input id="serverKey" type="password" autocomplete="off" placeholder="贴上 kaggle.json 里的 key">
         <label for="serverDataset">数据集（可留空）</label>
-        <input id="serverDataset" type="text" autocomplete="off" placeholder="例如：xiongyong5207/qwen-image-21-models">
+        <input id="serverDataset" type="text" autocomplete="off" placeholder="帳號名/數據集名">
         <p class="note">数据集是这个账号在 Kaggle 上建好的模型缓存。留空表示不配，跑图时每次重新下载 14.23GB 模型。</p>
         <div class="row">
           <button id="saveServerBtn" class="primary">保存服务器</button>

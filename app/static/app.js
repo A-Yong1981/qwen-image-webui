@@ -73,6 +73,24 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+// 帳號脫敏（公共場合防偷看）：只顯示頭一個字母，後面全部打星號，
+// 例如 xiongyong5207 → x***********。數據集只把 owner 那段打碼，
+// slug 原樣保留，例如 xiongyong5207/qwen-image-21-models →
+// x***********/qwen-image-21-models。
+function maskName(name) {
+  const s = String(name || "");
+  if (s.length <= 1) return s;
+  return s[0] + "*".repeat(s.length - 1);
+}
+
+function maskDataset(ref) {
+  const s = String(ref || "");
+  if (!s) return s;
+  const parts = s.split("/");
+  parts[0] = maskName(parts[0]);
+  return parts.join("/");
+}
+
 // ---- 頁籤 ----
 document.querySelectorAll(".tab").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -193,7 +211,10 @@ async function loadSettings() {
     if (r.status === 401) { showLogin(); return; }
     const s = await r.json();
     configured = !!s.kaggle_configured;
-    $("kaggleUser").value = s.kaggle_username || "";
+    $("kaggleUser").value = "";
+    $("kaggleUser").placeholder = s.kaggle_username
+      ? `已保存：${maskName(s.kaggle_username)}（留空表示不改）`
+      : "請輸入 Kaggle 用戶名";
     $("kaggleKey").value = "";
     $("kaggleKey").placeholder = s.key_saved
       ? "已保存的金鑰（留空表示不改）"
@@ -203,7 +224,7 @@ async function loadSettings() {
       : "";
     const cur = (s.servers || []).find((x) => x.id === s.current_server_id);
     $("currentServerNote").textContent = cur
-      ? `目前伺服器：${cur.name}（${cur.username}）${cur.dataset ? "，已配數據集" : "，未配數據集（每次下載模型）"}。`
+      ? `目前伺服器：${cur.name}（${maskName(cur.username)}）${cur.dataset ? "，已配數據集" : "，未配數據集（每次下載模型）"}。`
       : "目前沒有伺服器，請在下方「伺服器」區新增一個。";
     $("keyWarning").classList.toggle("hidden", configured);
   } catch (e) {
@@ -309,8 +330,8 @@ function renderServerList() {
     row.innerHTML = `
       <div class="server-meta">
         <p class="server-name">${escapeHtml(s.name)}${isCurrent ? ' <span class="server-current">目前</span>' : ""}</p>
-        <p class="note">帳號：${escapeHtml(s.username)}　金鑰：${s.key_saved ? "已保存" + (s.key_hint || "") : "未填"}</p>
-        <p class="note">數據集：${s.dataset ? escapeHtml(s.dataset) : "未配（每次下載模型）"}</p>
+        <p class="note">帳號：${escapeHtml(maskName(s.username))}　金鑰：${s.key_saved ? "已保存" + (s.key_hint || "") : "未填"}</p>
+        <p class="note">數據集：${s.dataset ? escapeHtml(maskDataset(s.dataset)) : "未配（每次下載模型）"}</p>
       </div>`;
     const actions = document.createElement("div");
     actions.className = "server-actions";
@@ -361,10 +382,14 @@ function startServerEdit(s) {
   editingServerId = s.id;
   $("serverFormTitle").textContent = "編輯伺服器";
   $("serverName").value = s.name;
-  $("serverUser").value = s.username;
+  $("serverUser").value = "";
+  $("serverUser").placeholder = `已保存：${maskName(s.username)}（留空表示不改）`;
   $("serverKey").value = "";
   $("serverKey").placeholder = s.key_saved ? "已保存的金鑰（留空表示不改）" : "貼上 kaggle.json 裡的 key";
-  $("serverDataset").value = s.dataset || "";
+  $("serverDataset").value = "";
+  $("serverDataset").placeholder = s.dataset
+    ? `已保存：${maskDataset(s.dataset)}（留空表示不改）`
+    : "帳號名/數據集名";
   $("cancelServerEditBtn").classList.remove("hidden");
   $("serverMsg").textContent = "";
   $("serverName").focus();
@@ -375,9 +400,11 @@ function resetServerForm() {
   $("serverFormTitle").textContent = "新增伺服器";
   $("serverName").value = "";
   $("serverUser").value = "";
+  $("serverUser").placeholder = "請輸入 Kaggle 用戶名";
   $("serverKey").value = "";
   $("serverKey").placeholder = "貼上 kaggle.json 裡的 key";
   $("serverDataset").value = "";
+  $("serverDataset").placeholder = "帳號名/數據集名";
   $("cancelServerEditBtn").classList.add("hidden");
 }
 
@@ -396,7 +423,8 @@ $("saveServerBtn").addEventListener("click", async () => {
     msg.textContent = "請給伺服器起個名字。";
     return;
   }
-  if (!username) {
+  // 新增時用戶名必填；編輯時留空表示沿用原值。
+  if (!editingServerId && !username) {
     msg.textContent = "請填 Kaggle 用戶名。";
     return;
   }
@@ -405,7 +433,10 @@ $("saveServerBtn").addEventListener("click", async () => {
     return;
   }
   msg.textContent = "保存中……";
-  const body = { name, username, key, dataset };
+  const body = { name, username, key };
+  // 編輯時數據集留空表示沿用原值：不要把 dataset 放進 body，
+  // 後端收到空字串會把數據集清空。新增時照常帶上（可留空）。
+  if (!editingServerId || dataset) body.dataset = dataset;
   const url = editingServerId
     ? `/api/servers/${encodeURIComponent(editingServerId)}`
     : "/api/servers";
@@ -575,6 +606,7 @@ function fmtOptionsFull(opts) {
   if (opts.seed !== undefined && opts.seed !== null) parts.push(`種子 ${opts.seed}`);
   if (opts.steps) parts.push(`${opts.steps} 步`);
   if (opts.cfg !== undefined && opts.cfg !== null) parts.push(`CFG ${opts.cfg}`);
+  if (opts.negative_prompt) parts.push(`負面 ${truncateText(opts.negative_prompt, 40)}`);
   return parts.join(" · ");
 }
 
@@ -688,6 +720,7 @@ function collectOptions() {
     seed: $("seed").value.trim(),
     steps: $("steps").value,
     cfg: $("cfg").value,
+    negative_prompt: $("negativePrompt").value.trim(),
   };
 }
 
@@ -706,7 +739,10 @@ function translateImageRefs(text) {
 }
 
 // 關鍵詞對照表（按順序套用，先配到的先吃掉原文，長詞組優先於單字）。
-// 桶：subject 主體、scene 場景、action 動作、light 光線。
+// 桶：subject 主體、scene 場景、action 動作、light 光線、camera 鏡頭、style 風格。
+// 詞庫來源：Awesome-muse-image-prompts-and-skills（data/prompts.json 13 條）
+// 的高頻寫法——人像保真（id 2/8/11）、光線術語（id 2）、鏡頭規格（id 8/11/12）、
+// 質感詞（id 4/8/11）、角色分工（id 13），再按電商服飾場景補齊。
 const META_RULES = [
   [/電腦店|电脑店/, "computer shop", "subject"],
   [/門面|门面|店面|店門|店门/, "storefront", "subject"],
@@ -720,6 +756,7 @@ const META_RULES = [
   [/手機|手机/, "smartphone", "subject"],
   [/女子|女人|女生|女孩/, "woman", "subject"],
   [/男子|男人|男生|男孩/, "man", "subject"],
+  [/人像|肖像/, "portrait", "subject"],
   [/人/, "person", "subject"],
   [/中國風|中国风/, "Chinese style", "subject"],
   [/貓|猫/, "cat", "subject"],
@@ -727,15 +764,36 @@ const META_RULES = [
   [/花/, "flowers", "subject"],
   [/樹|树/, "tree", "subject"],
   [/車|车/, "car", "subject"],
+  [/咖啡廳|咖啡店|咖啡馆/, "cozy café", "scene"],
   [/咖啡/, "coffee", "subject"],
   [/書|书/, "book", "subject"],
   [/桌子/, "table", "subject"],
   [/椅子/, "chair", "subject"],
   [/窗/, "window", "subject"],
   [/門|门/, "door", "subject"],
+  [/霓虹燈|霓虹灯/, "neon lights", "light"],
+  [/燈光|灯光/, "warm practical lights", "light"],
   [/燈|灯/, "lamp", "subject"],
   [/裙子/, "dress", "subject"],
   [/眼鏡|眼镜/, "glasses", "subject"],
+  [/模特|模特兒/, "professional fashion model", "subject"],
+  [/穿搭/, "styled outfit", "subject"],
+  [/版型/, "tailored fit", "subject"],
+  [/修身/, "slim fit", "subject"],
+  [/面料/, "premium fabric", "subject"],
+  [/連衣裙|连衣裙|洋裝|洋装/, "elegant dress", "subject"],
+  [/旗袍/, "cheongsam", "subject"],
+  [/漢服|汉服/, "hanfu traditional dress", "subject"],
+  [/西裝|西装/, "tailored suit", "subject"],
+  [/婚紗|婚纱/, "wedding gown", "subject"],
+  [/絲綢|丝绸/, "silk fabric", "subject"],
+  [/牛仔/, "denim", "subject"],
+  [/皮衣/, "leather jacket", "subject"],
+  [/珠寶|珠宝/, "jewelry", "subject"],
+  [/手錶|手表/, "luxury watch", "subject"],
+  [/高跟鞋/, "high heels", "subject"],
+  [/外套|大衣/, "coat", "subject"],
+  [/氣質|气质/, "elegant demeanor", "subject"],
   [/帽子/, "hat", "subject"],
   [/紅色|红色/, "red", "subject"],
   [/藍色|蓝色/, "blue", "subject"],
@@ -760,6 +818,19 @@ const META_RULES = [
   [/海灘|沙灘|海滩/, "beach", "scene"],
   [/辦公室|办公室/, "office", "scene"],
   [/臥室|卧室/, "bedroom", "scene"],
+  [/影棚/, "photo studio", "scene"],
+  [/白底/, "clean white background", "scene"],
+  [/圖書館|图书馆/, "library", "scene"],
+  [/公園|公园/, "park", "scene"],
+  [/森林/, "forest", "scene"],
+  [/湖泊/, "lake", "scene"],
+  [/湖/, "lake", "scene"],
+  [/城市/, "cityscape", "scene"],
+  [/夜景/, "night cityscape", "scene"],
+  [/商場|商场|專櫃|专柜/, "boutique store", "scene"],
+  [/廚房|厨房/, "kitchen", "scene"],
+  [/陽台|阳台/, "balcony", "scene"],
+  [/海邊|海边/, "seaside", "scene"],
   [/山/, "mountains", "scene"],
   [/海/, "sea", "scene"],
   [/天空/, "sky", "scene"],
@@ -768,6 +839,12 @@ const META_RULES = [
   [/場景|场景/, "the scene", "scene"],
   [/站著|站在|站/, "standing", "action"],
   [/坐著|坐在|坐/, "sitting", "action"],
+  [/大笑/, "laughing", "action"],
+  [/沉思/, "thoughtful expression", "action"],
+  [/自信/, "confident expression", "action"],
+  [/回眸/, "looking back over the shoulder", "action"],
+  [/凝視|凝视/, "gazing", "action"],
+  [/伸手/, "reaching out", "action"],
   [/微笑|笑/, "smiling", "action"],
   [/走路|走/, "walking", "action"],
   [/看著|看着|看/, "looking", "action"],
@@ -781,12 +858,45 @@ const META_RULES = [
   [/晚上|夜晚|夜間|夜间/, "night", "light"],
   [/霓虹/, "neon lights", "light"],
   [/陽光|阳光|日光/, "sunlight", "light"],
+  [/黃金時刻|黄金时刻|金色時刻|金色时刻/, "golden hour", "light"],
+  [/逆光/, "backlit with rim light", "light"],
+  [/輪廓光|轮廓光/, "rim light", "light"],
+  [/日出/, "sunrise", "light"],
+  [/柔光/, "soft diffused light", "light"],
+  [/自然光/, "natural daylight", "light"],
+  [/月光/, "moonlight", "light"],
+  [/燭光|烛光/, "candlelight", "light"],
+  [/體積光|体积光/, "volumetric light", "light"],
   [/柔和/, "soft light", "light"],
   [/雨/, "rainy", "light"],
+  // 鏡頭段（倉庫 id 8/11/12 的鏡頭規格寫法）。
+  [/特寫|特写|近景/, "close-up portrait", "camera"],
+  [/全身/, "full-body portrait", "camera"],
+  [/半身/, "half-body portrait", "camera"],
+  [/淺景深|浅景深/, "shallow depth of field", "camera"],
+  [/廣角|广角/, "wide-angle lens", "camera"],
+  [/俯視|俯视|鳥瞰|鸟瞰/, "aerial view", "camera"],
+  [/仰拍/, "low-angle shot", "camera"],
+  [/側臉|侧脸/, "side profile", "camera"],
+  // 風格質感段（倉庫 id 4/8/11 的質感與風格寫法）。
+  [/電影感|电影感|電影|电影/, "cinematic", "style"],
+  [/紀實|纪实/, "documentary style", "style"],
+  [/寫實|写实|超寫實|超写实/, "ultra-realistic", "style"],
+  [/插畫|插画/, "illustration style", "style"],
+  [/水彩/, "watercolor style", "style"],
+  [/膠片感|胶片感/, "subtle film grain", "style"],
+  [/雜誌風|杂志风/, "editorial magazine style", "style"],
+  [/商業廣告|商业广告/, "commercial advertising photography", "style"],
+  [/皮膚質感|皮肤质感/, "natural skin texture", "style"],
+  [/髮絲|发丝/, "detailed hair texture", "style"],
+  [/布料質感|布料质感/, "fabric texture", "style"],
+  [/冷色調|冷色调/, "cool color grade", "style"],
+  [/暖色調|暖色调/, "warm color grade", "style"],
+  [/霧面|雾面/, "matte finish", "style"],
 ];
 
-// 把口語初稿擴寫成結構化英文提示詞：
-// 主體與動作，場景環境，電影級光線，鏡頭與構圖，風格質感，質量詞。
+// 把口語初稿擴寫成結構化英文提示詞，按倉庫高品質提示詞的六段結構
+// 固定順序：主體與動作 → 場景環境 → 光線 → 鏡頭與構圖 → 風格質感 → 質量詞。
 // <imageN> 引用與 CHUFENG 這類專名原樣保留；對不上的中文原樣留著
 // （Qwen 編碼器本身認中文），不丟資訊。
 function expandMetaPrompt(draft, mode) {
@@ -794,11 +904,13 @@ function expandMetaPrompt(draft, mode) {
   const refs = [...new Set(text.match(/<image[1-4]>/gi) || [])]
     .map((r) => r.toLowerCase());
   let work = text.replace(/<image[1-4]>/gi, " ");
-  const subject = [], scene = [], action = [], light = [];
+  const subject = [], scene = [], action = [], light = [], camera = [], style = [];
   const pushTo = (bucket, en) => {
     const arr = bucket === "subject" ? subject
       : bucket === "scene" ? scene
-      : bucket === "action" ? action : light;
+      : bucket === "action" ? action
+      : bucket === "camera" ? camera
+      : bucket === "style" ? style : light;
     if (en && !arr.includes(en)) arr.push(en);
   };
   // 招牌寫著 CHUFENG → sign reading CHUFENG（專名原樣保留）。
@@ -838,11 +950,13 @@ function expandMetaPrompt(draft, mode) {
     work = work.replace(t, " ");
   }
   // 剩下的中文：去掉量詞、虛詞與標點，留下的原樣保留，不丟資訊。
+  // 單字殘片（穿、時、直這類）幾乎不帶資訊，丟掉；多字殘詞留著給模型讀。
   let rest = work
     .replace(/一[台隻只張张座條条個个]/g, " ")
-    .replace(/[有的是在了和與与跟把被很非常要讓让請请到里上中]/g, " ")
+    .replace(/[有的是在了和與与跟把被很非常要讓让請请到里上中着一]/g, " ")
     .replace(/[，,。.!！?？；;：:、\s]+/g, " ")
     .trim();
+  rest = rest.split(" ").filter((t) => t.length >= 2).join(" ");
   if (rest.replace(/\s/g, "").length < 2) rest = "";
   // 發光主體＋櫃台內位置合併成一句。
   const glowIdx = subject.findIndex((s) => s.startsWith("glowing "));
@@ -855,17 +969,41 @@ function expandMetaPrompt(draft, mode) {
   }
   const parts = [];
   if (refs.length) parts.push(refs.join(" "));
-  parts.push(...subject, ...scene, ...action);
+  // 參考模式：先定調「保住原圖」再寫新內容（倉庫 id 2 的寫法）。
+  const isRef = mode && mode !== "t2i";
+  if (isRef) parts.push("preserve the original composition, lighting, and identity");
+  parts.push(...subject, ...action);
+  parts.push(...scene);
   if (light.length) parts.push(...light);
   else parts.push("soft natural light");
-  const hasStorefront = subject.some((s) => s.includes("storefront"));
   parts.push("cinematic lighting");
-  parts.push(hasStorefront ? "eye-level storefront composition" : "eye-level composition");
-  parts.push(mode && mode !== "t2i"
-    ? "photorealistic, highly detailed, seamless edit, 8k quality"
-    : "photorealistic, highly detailed, 8k quality");
+  // 鏡頭段：景別 → 構圖 → 人像加 85mm（倉庫 id 8、11 的寫法）。
+  const cameraParts = [...camera];
+  const hasStorefront = subject.some((s) => s.includes("storefront"));
+  cameraParts.push(hasStorefront ? "eye-level storefront composition" : "eye-level composition");
+  const hasPerson = subject.some((s) => /woman|man|portrait/.test(s));
+  if (hasPerson) {
+    cameraParts.push("shot on a full-frame camera, 85mm lens");
+    if (!camera.includes("shallow depth of field")) cameraParts.push("shallow depth of field");
+  }
+  parts.push(...cameraParts);
+  // 風格質感段：沒寫風格就預設寫實。
+  if (style.length) parts.push(...style);
+  else parts.push("photorealistic");
+  parts.push("cinematic color grading");
+  parts.push(isRef
+    ? "ultra-detailed, seamless edit, 8k quality, masterpiece quality"
+    : "ultra-detailed, 8k quality, masterpiece quality");
   if (rest) parts.push(rest);
   return parts.filter(Boolean).join(", ");
+}
+
+// 負面提示詞預設（倉庫 id 8「No facial drift, body distortion, extra limbs,
+// text, watermark…」的寫法）：畫面有招牌文字時不加 text，免得跟正面提示詞打架。
+const DEFAULT_NEGATIVE = "blurry, low quality, distorted, deformed hands, extra limbs, bad anatomy, watermark";
+function defaultNegative(draft) {
+  const hasText = /招牌|文字|標題|标题|标语|標語|text|sign|letter/i.test(draft || "");
+  return hasText ? DEFAULT_NEGATIVE : DEFAULT_NEGATIVE + ", text";
 }
 
 $("expandBtn").addEventListener("click", () => {
@@ -877,6 +1015,10 @@ $("expandBtn").addEventListener("click", () => {
   }
   $("structuredPrompt").value = expandMetaPrompt(draft, genMode);
   structuredDirty = false;
+  // 負面框空著才自動填預設（使用者自己改過的不要蓋掉）。
+  if (!$("negativePrompt").value.trim()) {
+    $("negativePrompt").value = defaultNegative(draft);
+  }
   msg.textContent = "已擴寫，可以再改，改完直接按「開始生圖」。";
 });
 
@@ -932,6 +1074,7 @@ $("generateBtn").addEventListener("click", async () => {
     form.append("seed", options.seed);
     form.append("steps", options.steps);
     form.append("cfg", options.cfg);
+    form.append("negative_prompt", options.negative_prompt);
     refFiles.forEach((f) => form.append("refs", f, f.name));
     r = await fetch("/api/jobs/with-refs", { method: "POST", body: form });
   }
@@ -1227,6 +1370,9 @@ $("reusePromptBtn").addEventListener("click", () => {
   if (opts.seed !== undefined && opts.seed !== null) $("seed").value = opts.seed;
   if (opts.steps) $("steps").value = opts.steps;
   if (opts.cfg !== undefined && opts.cfg !== null) $("cfg").value = opts.cfg;
+  if (opts.negative_prompt !== undefined && opts.negative_prompt !== null) {
+    $("negativePrompt").value = opts.negative_prompt;
+  }
   if (opts.mode && opts.mode !== "t2i") {
     $("generateMsg").textContent = "已帶回上次的設定，參考圖請重新上傳。";
   }

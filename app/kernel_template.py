@@ -141,7 +141,8 @@ def build_workflow(opts, prompt):
                   "inputs": {"clip": ["2", 0], "text": prompt}},
             "9": {"class_type": "CLIPTextEncode",
                   "inputs": {"clip": ["2", 0],
-                             "text": "blurry, low quality, distorted"}},
+                             "text": opts.get("negative_prompt")
+                                     or "blurry, low quality, distorted"}},
             "5": {"class_type": "EmptyLatentImage",
                   "inputs": {"batch_size": 1, "height": height, "width": width}},
             "6": {"class_type": "KSampler",
@@ -171,7 +172,7 @@ def build_workflow(opts, prompt):
         "clip": ["2", 0],
         "vae": ["3", 0],
         "prompt": prompt,
-        "negative_prompt": "",
+        "negative_prompt": opts.get("negative_prompt") or "",
         "resolution": 0,
     }
     workflow = {

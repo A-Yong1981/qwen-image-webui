@@ -702,6 +702,10 @@ def _normalize_options(raw, ref_count=None, ref_urls=None):
                           secrets.randbelow(10 ** 15))
     steps = _clamp_int(raw.get("steps"), 10, 50, 20)
     cfg = _clamp_float(raw.get("cfg"), 1.0, 4.0, 1.0)
+    # 負面提示詞（v2.14）：可選，留空表示用預設（文生圖預設
+    # "blurry, low quality, distorted"，參考生圖預設空字串）。
+    # 前端最多 500 字，這裡再截一次防呆。
+    negative_prompt = str(raw.get("negative_prompt") or "").strip()[:500]
     return {
         "mode": mode,
         "ref_count": int(ref_count if ref_count is not None
@@ -714,6 +718,7 @@ def _normalize_options(raw, ref_count=None, ref_urls=None):
         "seed": seed,
         "steps": steps,
         "cfg": cfg,
+        "negative_prompt": negative_prompt,
         # 這個任務要不要掛數據集（由建立時選中的伺服器決定，
         # 有配數據集才 True）；內核腳本第 3 步看這個值分流。
         "use_dataset": bool(raw.get("use_dataset")),
@@ -1584,7 +1589,7 @@ async def add_server(request: Request):
     if not _valid_dataset_ref(dataset):
         return JSONResponse(
             {"error": "數據集請填 owner/slug 的格式，"
-                      "例如 xiongyong5207/qwen-image-21-models"},
+                      "例如：帳號名/數據集名"},
             status_code=400)
     settings = load_settings()
     if any(s["name"] == name for s in settings.get("servers") or []):
@@ -1623,7 +1628,7 @@ async def update_server(server_id: str, request: Request):
     if not _valid_dataset_ref(dataset):
         return JSONResponse(
             {"error": "數據集請填 owner/slug 的格式，"
-                      "例如 xiongyong5207/qwen-image-21-models"},
+                      "例如：帳號名/數據集名"},
             status_code=400)
     if name:
         srv["name"] = name
