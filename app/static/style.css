@@ -465,6 +465,52 @@ code {
   box-shadow: 0 8px 22px rgba(10, 138, 104, 0.09);
 }
 
+/* 圖片模糊（公共場合防偷看）：預設全糊，點一下看原圖，再點一下糊回去。 */
+.img-blurred {
+  filter: blur(24px);
+}
+.img-wrap {
+  position: relative;
+  cursor: pointer;
+  margin-top: 10px;
+}
+.img-wrap .result {
+  margin-top: 0;
+}
+.img-blur-hint {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+/* 歷史記錄縮圖上的小眼睛開關：點一下看這張的原圖，再點一下糊回去。 */
+.thumb-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.thumb-eye {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 /* 歷史記錄 */
 .history-head {
   display: flex;

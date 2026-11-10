@@ -126,12 +126,16 @@
           <p id="currentPrompt" class="prompt"></p>
           <p id="currentOptions" class="note"></p>
           <p id="currentNote" class="note"></p>
-          <img id="resultImg" class="result hidden" alt="生成的圖片">
+          <div id="resultImgWrap" class="img-wrap hidden" title="點一下看原圖，再點一下糊回去">
+            <img id="resultImg" class="result" alt="生成的圖片">
+            <span id="resultBlurHint" class="img-blur-hint">👁 點一下看原圖</span>
+          </div>
           <div id="resultActions" class="hidden">
             <a id="downloadBtn" class="primary" href="#" download>下載原圖</a>
           </div>
           <p id="currentError" class="error hidden"></p>
           <div class="row preview-actions">
+            <button id="blurToggleBtn" type="button">👁 看原圖</button>
             <button id="copyPromptBtn">複製提示詞</button>
             <button id="reusePromptBtn" class="primary">再用這個提示詞生成</button>
             <button id="cancelJobBtn" class="btn-danger" type="button">取消任務</button>

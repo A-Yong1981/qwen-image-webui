@@ -21,6 +21,25 @@ let editingServerId = null;
 // 歷史頁的伺服器篩選：預設跟著目前伺服器走（只看這個伺服器的任務），
 // 選 "all" 可以兩個伺服器一起看。切換伺服器時自動跟著切。
 let historyServerFilter = "current";
+// 圖片模糊（公共場合防偷看）：每張圖預設全糊，各自帶開關。
+// 點一張糊著的圖（或它旁邊的開關）看那張的原圖，再點一下糊回去。
+// 哪張看過了只記在這次打開的頁面裡，刷新就回到全糊。
+let revealedJobs = new Set();
+
+function applyImgBlur(imgEl, jobId) {
+  if (!imgEl) return false;
+  const blurred = !!jobId && !revealedJobs.has(jobId);
+  imgEl.classList.toggle("img-blurred", blurred);
+  return blurred;
+}
+
+function toggleReveal(jobId) {
+  if (!jobId) return;
+  if (revealedJobs.has(jobId)) revealedJobs.delete(jobId);
+  else revealedJobs.add(jobId);
+  renderCurrentJob();
+  renderHistory();
+}
 
 function $(id) {
   return document.getElementById(id);
@@ -432,6 +451,14 @@ $("serverSelect").addEventListener("change", () => {
   if (id) activateServer(id);
 });
 
+// ---- 圖片模糊：每張圖各自帶開關 ----
+$("blurToggleBtn").addEventListener("click", () => {
+  if (displayedJob) toggleReveal(displayedJob.id);
+});
+$("resultImgWrap").addEventListener("click", () => {
+  if (displayedJob) toggleReveal(displayedJob.id);
+});
+
 // ---- 歷史記錄：按伺服器篩選 ----
 $("historyServerFilter").addEventListener("change", () => {
   historyServerFilter = $("historyServerFilter").value;
@@ -766,16 +793,22 @@ function renderCurrentJob() {
     err.classList.add("hidden");
   }
   const img = $("resultImg");
+  const wrap = $("resultImgWrap");
+  const hint = $("resultBlurHint");
+  const blurBtn = $("blurToggleBtn");
   const actions = $("resultActions");
   if (job.status === "completed") {
     img.src = `/api/jobs/${job.id}/image?t=${Date.now()}`;
-    img.classList.remove("hidden");
+    wrap.classList.remove("hidden");
+    const blurred = applyImgBlur(img, job.id);
+    hint.style.display = blurred ? "" : "none";
+    blurBtn.textContent = blurred ? "👁 看原圖" : "🔒 模糊";
     const dl = $("downloadBtn");
     dl.href = `/api/jobs/${job.id}/image`;
     dl.setAttribute("download", `qwen-${job.id}.png`);
     actions.classList.remove("hidden");
   } else {
-    img.classList.add("hidden");
+    wrap.classList.add("hidden");
     actions.classList.add("hidden");
   }
   // 預覽區的刪除按鈕對已結束的任務顯示（已完成、失敗、已取消）。
@@ -797,9 +830,10 @@ function renderHistory() {
   jobs.forEach((job) => {
     const card = document.createElement("div");
     card.className = "job-card";
+    const blurred = job.status === "completed" && !revealedJobs.has(job.id);
     const thumb =
       job.status === "completed"
-        ? `<img class="thumb" src="/api/jobs/${job.id}/image" alt="縮圖" loading="lazy">`
+        ? `<span class="thumb-wrap"><img class="thumb${blurred ? " img-blurred" : ""}" src="/api/jobs/${job.id}/image" alt="縮圖" loading="lazy"><button type="button" class="thumb-eye" title="點一下看這張的原圖">${blurred ? "👁" : "🔒"}</button></span>`
         : '<div class="thumb none">無圖</div>';
     card.innerHTML = `
       ${thumb}
@@ -811,6 +845,13 @@ function renderHistory() {
         ${job.status === "failed" && job.error
           ? `<p class="error">失敗原因：${escapeHtml(job.error)}</p>` : ""}
       </div>`;
+    const eye = card.querySelector(".thumb-eye");
+    if (eye) {
+      eye.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleReveal(job.id);
+      });
+    }
     card.addEventListener("click", () => showPreview(job));
     if (job.status === "completed" || job.status === "failed" ||
         job.status === "cancelled") {
