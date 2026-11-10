@@ -29,7 +29,7 @@ header {
   -webkit-backdrop-filter: blur(18px) saturate(1.6);
   backdrop-filter: blur(18px) saturate(1.6);
   border-bottom: 1px solid rgba(10, 138, 104, 0.12);
-  padding: 8px 16px;
+  padding: 6px 14px;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -37,8 +37,8 @@ header {
 }
 
 .header-text { min-width: 0; }
-header h1 { margin: 0; font-size: 20px; font-weight: 700; color: #0A8A68; letter-spacing: 0.2px; }
-header .sub { margin: 4px 0 0; color: #4A7A6A; font-size: 14px; }
+header h1 { margin: 0; font-size: 18px; font-weight: 700; color: #0A8A68; letter-spacing: 0.2px; }
+header .sub { margin: 2px 0 0; color: #4A7A6A; font-size: 13px; }
 
 /* 伺服器狀態：頁面右上角小膠囊，兩行小字；窄屏時自動換到標題下方。 */
 .header-status {
@@ -137,9 +137,8 @@ header .sub { margin: 4px 0 0; color: #4A7A6A; font-size: 14px; }
   display: flex;
   gap: 4px;
   padding: 4px;
-  width: calc(100% - 32px);
-  max-width: 1240px;
-  margin: 10px auto 0;
+  width: calc(100% - 24px);
+  margin: 8px auto 0;
   background: rgba(10, 138, 104, 0.10);
   border-radius: 999px;
 }
@@ -147,7 +146,7 @@ header .sub { margin: 4px 0 0; color: #4A7A6A; font-size: 14px; }
 .tab {
   flex: 1;
   margin-top: 0;
-  padding: 7px 10px;
+  padding: 6px 10px;
   border: none;
   background: transparent;
   border-radius: 999px;
@@ -170,9 +169,8 @@ main {
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: 1240px;
   margin: 0 auto;
-  padding: 10px 16px 12px;
+  padding: 8px 12px 10px;
 }
 
 /* 面板：白色半透明磨砂卡片，大圓角、柔和春綠陰影。
@@ -184,8 +182,8 @@ main {
   backdrop-filter: blur(14px);
   border: 1px solid rgba(10, 138, 104, 0.14);
   border-radius: 20px;
-  padding: 16px;
-  margin-top: 10px;
+  padding: 12px;
+  margin-top: 8px;
   box-shadow: 0 10px 28px rgba(10, 138, 104, 0.09);
   flex: 1;
   min-height: 0;
@@ -196,60 +194,153 @@ main {
 /* 生圖頁不滾動：左右兩欄自己在內部滾動。
    歷史、設定頁內容長了，在面板內部滾動。 */
 #tab-generate.panel.active { overflow: hidden; }
-#tab-history.panel.active,
-#tab-settings.panel.active { overflow-y: auto; }
+#tab-history.panel.active { overflow-y: auto; }
+/* 設定頁不整頁滾動：四張卡自己在內部滾動。 */
+#tab-settings.panel.active { overflow: hidden; }
 
-/* 生圖頁左右兩欄：左邊控制區固定寬、欄內可捲動；右邊預覽區佔剩餘寬度，
-   圖比預覽區大時預覽區內部捲動，圖片按原比例顯示、不壓扁。 */
+/* 生圖頁：全屏橫版嵌套雙列——左控制區 45%、右預覽區 55%，
+   左區內再分提示詞 55% / 參數 45%，右區內再分提示詞 45% / 圖片 55%。
+   桌面上一屏放下不滾動；欄位不夠高時各自在內部滾動。 */
 .gen-layout {
-  display: flex;
-  gap: 18px;
+  display: grid;
+  grid-template-columns: 45fr 55fr;
+  gap: 14px;
   align-items: stretch;
   flex: 1;
   min-height: 0;
 }
 
 .gen-controls {
-  flex: 0 0 400px;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 6px;
+  display: flex;
+  flex-direction: column;
+  padding-right: 4px;
 }
 
-.gen-preview {
+.gen-controls label { margin: 6px 0 3px; }
+.gen-controls .note { font-size: 12px; }
+
+/* 左區內部雙欄：提示詞塊 55%、參數塊 45%。 */
+.ctrl-cols {
+  display: grid;
+  grid-template-columns: 55fr 45fr;
+  gap: 12px;
   flex: 1;
+  min-height: 0;
+  margin-top: 4px;
+}
+
+.ctrl-prompt,
+.ctrl-params {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+/* 擴寫＋生圖兩個按鈕並排。 */
+.btn-row { flex-wrap: nowrap; }
+.btn-row button { flex: 1; min-width: 0; white-space: nowrap; }
+
+.gen-preview {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(214, 246, 226, 0.55));
   border: 1px solid rgba(10, 138, 104, 0.14);
   border-radius: 16px;
-  padding: 14px;
+  padding: 12px;
 }
 
 .gen-preview h2 { margin: 0 0 6px; }
 
+/* 右區內部雙欄：提示詞區 45%、圖片區 55%。 */
+.preview-cols {
+  display: grid;
+  grid-template-columns: 45fr 55fr;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  margin-top: 6px;
+}
+
+.preview-prompt {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preview-prompt .prompt {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 2px 0;
+}
+
+.preview-img {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 預覽區底部固定的快照參數標籤（一行小字）。 */
+.snapshot-tags {
+  margin-top: auto;
+  padding-top: 8px;
+  font-size: 12px;
+  color: #3D6B58;
+  background: rgba(214, 246, 226, 0.55);
+  border: 1px solid rgba(10, 138, 104, 0.14);
+  border-radius: 10px;
+  padding: 6px 10px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.snapshot-tags:empty { display: none; }
+
+/* 提示詞框右上角的小複製按鈕。 */
+.mini-btn {
+  margin: 0 0 0 8px;
+  padding: 2px 10px;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
 /* 預覽區的操作按鈕（複製／再用／刪除）靠左一排，空間不夠自動換行。 */
 .preview-actions { margin-top: 10px; }
 
-/* 設定頁：功能拆成四張獨立卡片，橫向一排、空間不夠自動換行。 */
+/* 設定頁：四張卡一排四列（寬屏）或兩行兩列（中等寬度），佔滿全寬；
+   內容多時卡片內部自己滾動，整頁不出現垂直滾動條。 */
 .settings-cards {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
-  flex-wrap: wrap;
-  align-items: stretch;
+  flex: 1;
+  min-height: 0;
   margin-top: 10px;
 }
 
 .settings-card {
-  flex: 1 1 260px;
-  min-width: 260px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid rgba(10, 138, 104, 0.14);
   border-radius: 18px;
   padding: 14px;
   box-shadow: 0 6px 18px rgba(10, 138, 104, 0.07);
+}
+
+@media (max-width: 1200px) {
+  .settings-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .settings-card h3 { margin: 0 0 8px; }
@@ -410,7 +501,8 @@ input[type="range"] {
 .warn { color: #A86A00; font-weight: bold; }
 .error { color: #C0392B; }
 .note { color: #4A7A6A; font-size: 13px; line-height: 1.5; }
-.status { font-size: 17px; font-weight: bold; color: #0A8A68; }
+/* 預覽區頂部狀態欄：單行緊湊顯示，太長就截斷。 */
+.status { font-size: 14px; font-weight: bold; color: #0A8A68; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .prompt { font-weight: bold; word-break: break-word; white-space: pre-wrap; }
 
 .prompt-label {
@@ -490,17 +582,20 @@ code {
   pointer-events: none;
   white-space: nowrap;
 }
-/* 歷史記錄縮圖上的小眼睛開關：點一下看這張的原圖，再點一下糊回去。 */
+/* 歷史記錄縮圖下的小眼睛開關：圖片在上、按鈕在下，緊貼圖片；
+   卡片再高也不會被推到底部。點一下看這張的原圖，再點一下糊回去。 */
 .thumb-wrap {
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
   flex-shrink: 0;
 }
 .thumb-eye {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
   width: 28px;
   height: 28px;
+  margin: 0;
   padding: 0;
   border: none;
   border-radius: 999px;
@@ -587,7 +682,7 @@ code {
 
 @media (max-width: 900px) {
   /* 窄屏：恢復頁面滾動，兩欄上下疊起來，控制區在上、預覽區在下；
-     設定卡片也上下疊。 */
+     左右大區與內部雙欄都改成上下疊；設定卡片也上下疊。 */
   body { display: block; height: auto; overflow: visible; }
   main { display: block; }
   .panel { overflow: visible; }
@@ -595,16 +690,22 @@ code {
   #tab-generate.panel.active { overflow: visible; }
   #tab-history.panel.active,
   #tab-settings.panel.active { overflow: visible; }
-  .gen-layout { flex-direction: column; }
+  .gen-layout { display: flex; flex-direction: column; }
+  .ctrl-cols { display: flex; flex-direction: column; }
+  .preview-cols { display: flex; flex-direction: column; }
   .gen-controls {
     flex: none;
     width: 100%;
     overflow: visible;
     padding-right: 0;
   }
+  .ctrl-prompt, .ctrl-params { overflow: visible; }
+  .preview-prompt { overflow: visible; }
+  .preview-prompt .prompt { overflow: visible; }
   .gen-preview { width: 100%; overflow: visible; }
-  .settings-cards { flex-direction: column; }
-  .settings-card { min-width: 0; }
+  .preview-img { overflow: visible; }
+  .settings-cards { display: flex; flex-direction: column; }
+  .settings-card { min-width: 0; overflow: visible; }
 }
 
 @media (max-width: 600px) {

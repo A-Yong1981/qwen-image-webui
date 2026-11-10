@@ -551,6 +551,9 @@ const REF_HELP = {
 const MODE_LABEL = { t2i: "純文字生圖", single: "單圖參考", multi: "多圖參考" };
 let genMode = "t2i";
 let refFiles = [];
+// 結構化提示詞框的 dirty 標誌：使用者手動改過就不再自動跟隨初稿；
+// 擴寫生成、提交、生圖後都清掉（視為系統生成、尚未手改）。
+let structuredDirty = false;
 
 function fmtOptions(opts) {
   if (!opts) return "";
@@ -593,8 +596,8 @@ function setMode(mode) {
     refFiles = [];
   }
   $("promptLabel").textContent = isRef
-    ? "生圖要求（寫清楚要怎麼改參考圖）"
-    : "生圖要求（中文就可以，直接寫你想要的畫面）";
+    ? "口語初稿（寫清楚要怎麼改參考圖）"
+    : "口語初稿（中文就可以，直接寫你想要的畫面）";
   $("prompt").placeholder = isRef
     ? "例如：把 <image1> 裡的人放到海灘上，換成傍晚的陽光"
     : "例如：白天的小電腦店門面，招牌寫著 CHUFENG，櫥窗裡有一台桌上型電腦";
@@ -688,9 +691,209 @@ function collectOptions() {
   };
 }
 
+// ---- 導演級擴寫（Meta-Prompt）：純前端規則，不用 API、不花額度 ----
+// 把「圖片N」「图N」「imageN」寫法統一轉成 <imageN>；已是 <imageN> 的原樣保留。
+function translateImageRefs(text) {
+  const kept = [];
+  let out = String(text || "").replace(/<image([1-4])>/gi, (m) => {
+    kept.push(m.toLowerCase());
+    return "\u0000" + (kept.length - 1) + "\u0000";
+  });
+  out = out.replace(/(?:圖片|图片)\s*([1-4])|(?:圖|图)\s*([1-4])|image\s*([1-4])/gi,
+    (m, a, b, c) => "<image" + (a || b || c) + ">");
+  out = out.replace(/\u0000(\d+)\u0000/g, (m, i) => kept[Number(i)]);
+  return out;
+}
+
+// 關鍵詞對照表（按順序套用，先配到的先吃掉原文，長詞組優先於單字）。
+// 桶：subject 主體、scene 場景、action 動作、light 光線。
+const META_RULES = [
+  [/電腦店|电脑店/, "computer shop", "subject"],
+  [/門面|门面|店面|店門|店门/, "storefront", "subject"],
+  [/招牌/, "store sign", "subject"],
+  [/櫃台|櫃檯|柜台/, "glass counter", "subject"],
+  [/桌上型電腦|台式電腦|桌上电脑/, "desktop computer", "subject"],
+  [/筆電|筆記型電腦|笔记本电脑/, "laptop", "subject"],
+  [/電腦|电脑/, "desktop computer", "subject"],
+  [/螢幕|屏幕/, "screen", "subject"],
+  [/鍵盤|键盘/, "keyboard", "subject"],
+  [/手機|手机/, "smartphone", "subject"],
+  [/女子|女人|女生|女孩/, "woman", "subject"],
+  [/男子|男人|男生|男孩/, "man", "subject"],
+  [/人/, "person", "subject"],
+  [/中國風|中国风/, "Chinese style", "subject"],
+  [/貓|猫/, "cat", "subject"],
+  [/狗/, "dog", "subject"],
+  [/花/, "flowers", "subject"],
+  [/樹|树/, "tree", "subject"],
+  [/車|车/, "car", "subject"],
+  [/咖啡/, "coffee", "subject"],
+  [/書|书/, "book", "subject"],
+  [/桌子/, "table", "subject"],
+  [/椅子/, "chair", "subject"],
+  [/窗/, "window", "subject"],
+  [/門|门/, "door", "subject"],
+  [/燈|灯/, "lamp", "subject"],
+  [/裙子/, "dress", "subject"],
+  [/眼鏡|眼镜/, "glasses", "subject"],
+  [/帽子/, "hat", "subject"],
+  [/紅色|红色/, "red", "subject"],
+  [/藍色|蓝色/, "blue", "subject"],
+  [/綠色|绿色/, "green", "subject"],
+  [/黃色|黄色/, "yellow", "subject"],
+  [/白色/, "white", "subject"],
+  [/黑色/, "black", "subject"],
+  [/金色/, "golden", "subject"],
+  [/銀色|银色/, "silver", "subject"],
+  [/粉色/, "pink", "subject"],
+  [/紫色/, "purple", "subject"],
+  [/可愛|可爱/, "cute", "subject"],
+  [/漂亮/, "beautiful", "subject"],
+  [/復古|复古/, "vintage", "subject"],
+  [/現代|现代/, "modern", "subject"],
+  [/科幻/, "sci-fi", "subject"],
+  [/未來|未来/, "futuristic", "subject"],
+  [/溫馨|温馨/, "cozy", "subject"],
+  [/浪漫/, "romantic", "subject"],
+  [/夢幻|梦幻/, "dreamy", "subject"],
+  [/街道|馬路|马路/, "street", "scene"],
+  [/海灘|沙灘|海滩/, "beach", "scene"],
+  [/辦公室|办公室/, "office", "scene"],
+  [/臥室|卧室/, "bedroom", "scene"],
+  [/山/, "mountains", "scene"],
+  [/海/, "sea", "scene"],
+  [/天空/, "sky", "scene"],
+  [/雲|云/, "clouds", "scene"],
+  [/店內|店里|店裡/, "inside the shop", "scene"],
+  [/場景|场景/, "the scene", "scene"],
+  [/站著|站在|站/, "standing", "action"],
+  [/坐著|坐在|坐/, "sitting", "action"],
+  [/微笑|笑/, "smiling", "action"],
+  [/走路|走/, "walking", "action"],
+  [/看著|看着|看/, "looking", "action"],
+  [/拿著|拿着|拿/, "holding", "action"],
+  [/合成/, "seamlessly composited", "action"],
+  [/放到|放在/, "placed in", "action"],
+  [/陽光下|阳光下/, "sunlit", "light"],
+  [/上午/, "morning light", "light"],
+  [/傍晚|黃昏|黄昏/, "dusk light", "light"],
+  [/下午|午後|午后/, "warm afternoon light", "light"],
+  [/晚上|夜晚|夜間|夜间/, "night", "light"],
+  [/霓虹/, "neon lights", "light"],
+  [/陽光|阳光|日光/, "sunlight", "light"],
+  [/柔和/, "soft light", "light"],
+  [/雨/, "rainy", "light"],
+];
+
+// 把口語初稿擴寫成結構化英文提示詞：
+// 主體與動作，場景環境，電影級光線，鏡頭與構圖，風格質感，質量詞。
+// <imageN> 引用與 CHUFENG 這類專名原樣保留；對不上的中文原樣留著
+// （Qwen 編碼器本身認中文），不丟資訊。
+function expandMetaPrompt(draft, mode) {
+  const text = translateImageRefs(draft);
+  const refs = [...new Set(text.match(/<image[1-4]>/gi) || [])]
+    .map((r) => r.toLowerCase());
+  let work = text.replace(/<image[1-4]>/gi, " ");
+  const subject = [], scene = [], action = [], light = [];
+  const pushTo = (bucket, en) => {
+    const arr = bucket === "subject" ? subject
+      : bucket === "scene" ? scene
+      : bucket === "action" ? action : light;
+    if (en && !arr.includes(en)) arr.push(en);
+  };
+  // 招牌寫著 CHUFENG → sign reading CHUFENG（專名原樣保留）。
+  work = work.replace(/招牌[^，,。.!！?？\n]{0,20}?([A-Za-z][A-Za-z0-9_-]*)/g, (m, t) => {
+    pushTo("subject", "sign reading " + t);
+    return " ";
+  });
+  // 組合片語（先處理，避免被單字規則拆開）。
+  work = work.replace(/(電腦店|电脑店)\s*(門面|门面|店面|店門|店门)/, (m) => {
+    pushTo("subject", "computer shop storefront");
+    return " ";
+  });
+  work = work.replace(/(發光|发光)\s*(電腦|电脑)/, (m) => {
+    pushTo("subject", "glowing desktop computer");
+    return " ";
+  });
+  work = work.replace(/(發光|发光)\s*(螢幕|屏幕)/, (m) => {
+    pushTo("subject", "glowing screen");
+    return " ";
+  });
+  work = work.replace(/(櫃台|櫃檯|柜台)[^，,。.!！?？\n]{0,10}?(裡|里)/, (m) => {
+    pushTo("scene", "inside the glass counter");
+    return " ";
+  });
+  // 單字對照：按表順序套用，配到的就吃掉原文。
+  for (const [re, en, bucket] of META_RULES) {
+    if (re.test(work)) {
+      pushTo(bucket, en);
+      work = work.replace(re, " ");
+    }
+  }
+  // 剩下的拉丁字母專名（CHUFENG、RTX 5090 這類）原樣保留。
+  const latin = work.match(/[A-Za-z][A-Za-z0-9 _-]{1,}/g) || [];
+  for (const t of [...new Set(latin.map((s) => s.trim()))]) {
+    if (!t) continue;
+    pushTo("subject", t);
+    work = work.replace(t, " ");
+  }
+  // 剩下的中文：去掉量詞、虛詞與標點，留下的原樣保留，不丟資訊。
+  let rest = work
+    .replace(/一[台隻只張张座條条個个]/g, " ")
+    .replace(/[有的是在了和與与跟把被很非常要讓让請请到里上中]/g, " ")
+    .replace(/[，,。.!！?？；;：:、\s]+/g, " ")
+    .trim();
+  if (rest.replace(/\s/g, "").length < 2) rest = "";
+  // 發光主體＋櫃台內位置合併成一句。
+  const glowIdx = subject.findIndex((s) => s.startsWith("glowing "));
+  const inIdx = scene.findIndex((s) => s.startsWith("inside "));
+  if (glowIdx >= 0 && inIdx >= 0) {
+    const merged = subject[glowIdx] + " " + scene[inIdx];
+    subject.splice(glowIdx, 1);
+    scene.splice(inIdx, 1);
+    subject.push(merged);
+  }
+  const parts = [];
+  if (refs.length) parts.push(refs.join(" "));
+  parts.push(...subject, ...scene, ...action);
+  if (light.length) parts.push(...light);
+  else parts.push("soft natural light");
+  const hasStorefront = subject.some((s) => s.includes("storefront"));
+  parts.push("cinematic lighting");
+  parts.push(hasStorefront ? "eye-level storefront composition" : "eye-level composition");
+  parts.push(mode && mode !== "t2i"
+    ? "photorealistic, highly detailed, seamless edit, 8k quality"
+    : "photorealistic, highly detailed, 8k quality");
+  if (rest) parts.push(rest);
+  return parts.filter(Boolean).join(", ");
+}
+
+$("expandBtn").addEventListener("click", () => {
+  const draft = $("prompt").value.trim();
+  const msg = $("expandMsg");
+  if (!draft) {
+    msg.textContent = "先寫一句初稿再擴寫。";
+    return;
+  }
+  $("structuredPrompt").value = expandMetaPrompt(draft, genMode);
+  structuredDirty = false;
+  msg.textContent = "已擴寫，可以再改，改完直接按「開始生圖」。";
+});
+
+// 初稿與結構化框同步：沒手改過結構化框時，初稿改動就自動跟隨。
+$("prompt").addEventListener("input", () => {
+  if (!structuredDirty) $("structuredPrompt").value = $("prompt").value;
+});
+$("structuredPrompt").addEventListener("input", () => {
+  structuredDirty = true;
+});
+
 // ---- 生圖 ----
 $("generateBtn").addEventListener("click", async () => {
-  const prompt = $("prompt").value.trim();
+  // 提交的提示詞：結構化框有內容就用它，否則用初稿。
+  const draft = $("prompt").value.trim();
+  const structured = $("structuredPrompt").value.trim();
+  const prompt = structured || draft;
   const msg = $("generateMsg");
   if (!configured) {
     $("keyWarning").classList.remove("hidden");
@@ -742,6 +945,8 @@ $("generateBtn").addEventListener("click", async () => {
   previewJob = null;
   msg.textContent = "已排隊，一張約 4 到 5 分鐘，頁面會自動更新狀態。";
   $("prompt").value = "";
+  // 結構化框不清空（留著給使用者複用），dirty 清掉，之後的新初稿可再同步。
+  structuredDirty = false;
   refFiles = [];
   renderRefThumbs();
   await refreshJobs();
@@ -772,6 +977,21 @@ function renderCurrentJob() {
     (job.server ? `　伺服器：${job.server}` : "");
   $("currentPrompt").textContent = job.prompt;
   $("currentOptions").textContent = fmtOptionsFull(job.options);
+  // 預覽區底部快照參數標籤：模式 · 比例 · 尺寸 · 種子 · 步數 · CFG。
+  // 種子用後端存的 options.seed（已是實際用的種子，留空時後端會隨機產生再存回）。
+  const tags = $("snapshotTags");
+  if (tags) {
+    const o = job.options || {};
+    const tagParts = [MODE_LABEL[o.mode] || "純文字生圖"];
+    if (o.aspect) tagParts.push(o.aspect);
+    if (o.width && o.height) tagParts.push(o.width + "×" + o.height);
+    const seedVal = (o.seed !== undefined && o.seed !== null && String(o.seed) !== "")
+      ? o.seed : null;
+    tagParts.push("種子 " + (seedVal !== null ? seedVal : "隨機"));
+    if (o.steps) tagParts.push(o.steps + " 步");
+    if (o.cfg !== undefined && o.cfg !== null) tagParts.push("CFG " + o.cfg);
+    tags.textContent = tagParts.join(" · ");
+  }
   $("currentNote").textContent =
     job.status === "queued"
       ? "在排隊等前面的任務跑完，一次只跑一張。"
@@ -992,6 +1212,9 @@ $("copyPromptBtn").addEventListener("click", async () => {
 $("reusePromptBtn").addEventListener("click", () => {
   if (!displayedJob) return;
   $("prompt").value = displayedJob.prompt;
+  // 結構化框也一起帶回（視為系統填入、尚未手改，之後的新初稿可再同步）。
+  $("structuredPrompt").value = displayedJob.prompt;
+  structuredDirty = false;
   // 把上次的選項一起帶回面板（參考圖要重新上傳，瀏覽器留不住圖）。
   const opts = displayedJob.options || {};
   if (opts.mode) setMode(opts.mode);

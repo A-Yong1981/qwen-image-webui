@@ -62,86 +62,101 @@
           <div id="refThumbs" class="ref-thumbs"></div>
         </div>
 
-        <label for="prompt" id="promptLabel">生圖要求（中文就可以，直接寫你想要的畫面）</label>
-        <textarea id="prompt" rows="3" maxlength="2000"
-          placeholder="例如：白天的小電腦店門面，招牌寫著 CHUFENG，櫥窗裡有一台桌上型電腦"></textarea>
-        <p class="note">寫 &lt;image1&gt;、&lt;image2&gt; 指第幾張參考圖（寫「图片1」也會自動幫你轉）。</p>
-
-        <label for="aspect">畫面比例</label>
-        <select id="aspect">
-          <option value="1:1" selected>1:1（正方形）</option>
-          <option value="16:9">16:9（橫屏）</option>
-          <option value="9:16">9:16（豎屏）</option>
-          <option value="4:3">4:3（橫）</option>
-          <option value="3:4">3:4（豎）</option>
-          <option value="3:2">3:2（橫）</option>
-          <option value="2:3">2:3（豎）</option>
-        </select>
-        <p class="note">選了比例，寬和高會自動填好。建議：抖音、小紅書用 9:16；壁紙用 16:9；頭像、商品圖用 1:1。</p>
-
-        <div class="row">
-          <div>
-            <label for="width">寬</label>
-            <input id="width" type="number" min="256" max="1280" step="16" value="768">
+        <div class="ctrl-cols">
+          <div class="ctrl-prompt">
+            <label for="prompt" id="promptLabel">口語初稿</label>
+            <textarea id="prompt" rows="3" maxlength="2000"
+              placeholder="例如：白天的小電腦店門面，招牌寫著 CHUFENG，櫥窗裡有一台桌上型電腦"></textarea>
+            <p class="note">寫 &lt;image1&gt;、&lt;image2&gt; 指第幾張參考圖（寫「图片1」也會自動幫你轉）。</p>
+            <div class="row btn-row">
+              <button id="expandBtn" type="button">✨ 導演級擴寫 (Meta-Prompt)</button>
+              <button id="generateBtn" class="primary">🚀 開始生圖</button>
+            </div>
+            <p id="expandMsg" class="msg"></p>
+            <label for="structuredPrompt">專業提示詞（可再改）</label>
+            <textarea id="structuredPrompt" rows="6" maxlength="4000"
+              placeholder="點上面「導演級擴寫」生成，或直接在這裡寫最終提示詞"></textarea>
+            <p class="note">生圖提交這裡的內容；沒擴寫就直接用上面初稿。本地擴寫，不用聯網、不花額度。</p>
+            <p id="keyWarning" class="warn hidden">還沒設定 Kaggle 金鑰，請先去「設定」頁填寫用戶名和金鑰。</p>
+            <p id="generateMsg" class="msg"></p>
           </div>
-          <div>
-            <label for="height">高</label>
-            <input id="height" type="number" min="256" max="1280" step="16" value="768">
+
+          <div class="ctrl-params">
+            <label for="aspect">畫面比例</label>
+            <select id="aspect" title="抖音、小紅書用 9:16；壁紙用 16:9；頭像、商品圖用 1:1">
+              <option value="1:1" selected>1:1（正方形）</option>
+              <option value="16:9">16:9（橫屏）</option>
+              <option value="9:16">9:16（豎屏）</option>
+              <option value="4:3">4:3（橫）</option>
+              <option value="3:4">3:4（豎）</option>
+              <option value="3:2">3:2（橫）</option>
+              <option value="2:3">2:3（豎）</option>
+            </select>
+
+            <div class="row">
+              <div>
+                <label for="width">寬</label>
+                <input id="width" type="number" min="256" max="1280" step="16" value="768">
+              </div>
+              <div>
+                <label for="height">高</label>
+                <input id="height" type="number" min="256" max="1280" step="16" value="768">
+              </div>
+            </div>
+
+            <label for="seed">種子</label>
+            <div class="row">
+              <input id="seed" type="number" min="0" placeholder="留空表示隨機" title="同一句話加同一個種子，出同一張圖；想換新的就點隨機">
+              <button id="randomSeedBtn" type="button">隨機</button>
+            </div>
+
+            <div class="row">
+              <div>
+                <label for="steps">步數</label>
+                <input id="steps" type="number" min="10" max="50" step="1" value="20" title="模型細化的次數，越多越細、越慢">
+              </div>
+              <div>
+                <label for="cfg">引導係數 CFG</label>
+                <input id="cfg" type="number" min="1" max="4" step="0.1" value="1" title="模型有多聽你的話，預設 1.0 最自然">
+              </div>
+            </div>
+            <p class="note">寬高按 32 取整，最大邊建議 ≤1024。採樣器固定 euler / simple。</p>
           </div>
         </div>
-        <p class="note">寬和高就是出圖的像素大小，會按 32 取整。建議：最大邊別超過 1024，圖越大跑得越慢、越容易失敗。</p>
-
-        <label for="seed">種子</label>
-        <div class="row">
-          <input id="seed" type="number" min="0" placeholder="留空表示隨機">
-          <button id="randomSeedBtn" type="button">隨機</button>
-        </div>
-        <p class="note">同一句話加同一個種子，出同一張圖；想換新的就點隨機。建議：留空隨機就行，喜歡的圖去歷史記錄抄種子。</p>
-
-        <div class="row">
-          <div>
-            <label for="steps">步數</label>
-            <input id="steps" type="number" min="10" max="50" step="1" value="20">
-          </div>
-          <div>
-            <label for="cfg">引導係數 CFG</label>
-            <input id="cfg" type="number" min="1" max="4" step="0.1" value="1">
-          </div>
-        </div>
-        <p class="note">步數是模型細化的次數（預設 20，越多越細、越慢）；引導係數是模型有多聽你的話（預設 1.0 最自然）。建議：兩個都不用動。</p>
-
-        <p class="note">採樣器固定用已驗證的組合（euler / simple），不用改。</p>
-
-        <button id="generateBtn" class="primary">開始生圖</button>
-        <p id="keyWarning" class="warn hidden">還沒設定 Kaggle 金鑰，請先去「設定」頁填寫用戶名和金鑰。</p>
-        <p id="generateMsg" class="msg"></p>
       </div>
 
       <div class="gen-preview">
-        <h2>預覽</h2>
         <p id="previewEmpty" class="note">還沒有圖，在左邊輸入要求開始第一張。</p>
         <div id="currentJob" class="hidden">
           <p id="currentStatus" class="status"></p>
-          <p class="prompt-label">原始提示詞</p>
-          <p id="currentPrompt" class="prompt"></p>
-          <p id="currentOptions" class="note"></p>
-          <p id="currentNote" class="note"></p>
-          <div id="resultImgWrap" class="img-wrap hidden" title="點一下看原圖，再點一下糊回去">
-            <img id="resultImg" class="result" alt="生成的圖片">
-            <span id="resultBlurHint" class="img-blur-hint">👁 點一下看原圖</span>
+          <div class="preview-cols">
+            <div class="preview-prompt">
+              <p class="prompt-label">原始提示詞
+                <button id="copyPromptBtn" type="button" class="mini-btn">複製</button>
+              </p>
+              <p id="currentPrompt" class="prompt"></p>
+              <p id="currentOptions" class="note"></p>
+              <p id="currentNote" class="note"></p>
+              <p id="currentError" class="error hidden"></p>
+              <p id="snapshotTags" class="snapshot-tags"></p>
+              <div class="row preview-actions">
+                <button id="reusePromptBtn" class="primary">再用這個提示詞生成</button>
+                <button id="cancelJobBtn" class="btn-danger" type="button">取消任務</button>
+                <button id="detailDeleteBtn" class="btn-danger" type="button">刪除這條記錄</button>
+              </div>
+              <p id="copyMsg" class="msg"></p>
+            </div>
+            <div class="preview-img">
+              <div id="resultImgWrap" class="img-wrap hidden" title="點一下看原圖，再點一下糊回去">
+                <img id="resultImg" class="result" alt="生成的圖片">
+                <span id="resultBlurHint" class="img-blur-hint">👁 點一下看原圖</span>
+              </div>
+              <div id="resultActions" class="hidden">
+                <a id="downloadBtn" class="primary" href="#" download>下載原圖</a>
+                <button id="blurToggleBtn" type="button">👁 看原圖</button>
+              </div>
+            </div>
           </div>
-          <div id="resultActions" class="hidden">
-            <a id="downloadBtn" class="primary" href="#" download>下載原圖</a>
-          </div>
-          <p id="currentError" class="error hidden"></p>
-          <div class="row preview-actions">
-            <button id="blurToggleBtn" type="button">👁 看原圖</button>
-            <button id="copyPromptBtn">複製提示詞</button>
-            <button id="reusePromptBtn" class="primary">再用這個提示詞生成</button>
-            <button id="cancelJobBtn" class="btn-danger" type="button">取消任務</button>
-            <button id="detailDeleteBtn" class="btn-danger" type="button">刪除這條記錄</button>
-          </div>
-          <p id="copyMsg" class="msg"></p>
         </div>
       </div>
     </div>
