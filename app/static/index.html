@@ -186,23 +186,6 @@
       千萬不要把金鑰發在聊天裡。</p>
     <div class="settings-cards">
       <div class="settings-card">
-        <h3>Kaggle 金鑰設定（目前伺服器）</h3>
-        <p id="currentServerNote" class="note"></p>
-        <label for="kaggleUser">Kaggle 用戶名</label>
-        <input id="kaggleUser" type="text" autocomplete="off" placeholder="請輸入 Kaggle 用戶名">
-        <label for="kaggleKey">Kaggle 長期 API 金鑰</label>
-        <input id="kaggleKey" type="password" autocomplete="off" placeholder="貼上 kaggle.json 裡的 key">
-        <p id="keySavedNote" class="note"></p>
-        <div class="row">
-          <button id="saveSettingsBtn" class="primary">保存</button>
-          <button id="testBtn">測試連線</button>
-        </div>
-        <p id="settingsMsg" class="msg"></p>
-        <h3>額度</h3>
-        <p id="quotaText" class="note">讀取中……</p>
-      </div>
-
-      <div class="settings-card">
         <h3>修改密碼</h3>
         <p class="note">改完密碼後要重新登入一次。</p>
         <label for="currentPass">目前的密碼</label>
@@ -242,6 +225,11 @@
           <button id="cancelServerEditBtn" class="hidden">取消编辑</button>
         </div>
         <p id="serverMsg" class="msg"></p>
+        <h3>額度（目前伺服器）</h3>
+        <p id="quotaText" class="note">讀取中……</p>
+        <div class="row">
+          <button id="testBtn">測試連線</button>
+        </div>
       </div>
     </div>
   </section>

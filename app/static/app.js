@@ -211,21 +211,6 @@ async function loadSettings() {
     if (r.status === 401) { showLogin(); return; }
     const s = await r.json();
     configured = !!s.kaggle_configured;
-    $("kaggleUser").value = "";
-    $("kaggleUser").placeholder = s.kaggle_username
-      ? `已保存：${maskName(s.kaggle_username)}（留空表示不改）`
-      : "請輸入 Kaggle 用戶名";
-    $("kaggleKey").value = "";
-    $("kaggleKey").placeholder = s.key_saved
-      ? "已保存的金鑰（留空表示不改）"
-      : "貼上 kaggle.json 裡的 key";
-    $("keySavedNote").textContent = s.key_saved
-      ? `金鑰已保存${s.key_hint ? "（" + s.key_hint + "）" : ""}，要換金鑰再貼新的進來。`
-      : "";
-    const cur = (s.servers || []).find((x) => x.id === s.current_server_id);
-    $("currentServerNote").textContent = cur
-      ? `目前伺服器：${cur.name}（${maskName(cur.username)}）${cur.dataset ? "，已配數據集" : "，未配數據集（每次下載模型）"}。`
-      : "目前沒有伺服器，請在下方「伺服器」區新增一個。";
     $("keyWarning").classList.toggle("hidden", configured);
   } catch (e) {
     configured = false;
@@ -245,35 +230,8 @@ async function loadQuota() {
   }
 }
 
-$("saveSettingsBtn").addEventListener("click", async () => {
-  const username = $("kaggleUser").value.trim();
-  const key = $("kaggleKey").value.trim();
-  const msg = $("settingsMsg");
-  if (!username && !key) {
-    msg.textContent = "沒有要改的內容，用戶名和金鑰都留空了。";
-    return;
-  }
-  msg.textContent = "保存中……";
-  const r = await fetch("/api/settings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, key }),
-  });
-  if (r.status === 401) { showLogin(); return; }
-  const data = await r.json();
-  if (r.ok && data.ok) {
-    msg.textContent = key
-      ? "已保存，金鑰已保存。建議按「測試連線」確認金鑰能用。"
-      : "已保存，金鑰未變。";
-    $("kaggleKey").value = "";
-    await loadSettings();
-  } else {
-    msg.textContent = "保存失敗：" + (data.error || "請稍後再試。");
-  }
-});
-
 $("testBtn").addEventListener("click", async () => {
-  const msg = $("settingsMsg");
+  const msg = $("serverMsg");
   msg.textContent = "測試連線中……";
   const r = await fetch("/api/settings/test", { method: "POST" });
   if (r.status === 401) { showLogin(); return; }
