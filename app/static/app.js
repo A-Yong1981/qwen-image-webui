@@ -714,15 +714,22 @@ const META_RULES = [
   [/手機|手机/, "smartphone", "subject"],
   [/女子|女人|女生|女孩/, "woman", "subject"],
   [/男子|男人|男生|男孩/, "man", "subject"],
+  [/帥哥|帅哥/, "handsome man", "subject"],
+  [/美女/, "beautiful woman", "subject"],
+  [/妹子/, "young woman", "subject"],
   [/人像|肖像/, "portrait", "subject"],
   [/人/, "person", "subject"],
   [/中國風|中国风/, "Chinese style", "subject"],
+  [/中國|中国/, "Chinese", "subject"],
+  [/日本/, "Japanese", "subject"],
   [/貓|猫/, "cat", "subject"],
   [/狗/, "dog", "subject"],
   [/花/, "flowers", "subject"],
   [/樹|树/, "tree", "subject"],
   [/車|车/, "car", "subject"],
   [/咖啡廳|咖啡店|咖啡馆/, "cozy café", "scene"],
+  [/獻酒|献酒|敬酒/, "offering wine", "subject"],
+  [/酒/, "wine", "subject"],
   [/咖啡/, "coffee", "subject"],
   [/書|书/, "book", "subject"],
   [/桌子/, "table", "subject"],
@@ -733,6 +740,7 @@ const META_RULES = [
   [/燈光|灯光/, "warm practical lights", "light"],
   [/燈|灯/, "lamp", "subject"],
   [/裙子/, "dress", "subject"],
+  [/比基尼/, "bikini", "subject"],
   [/眼鏡|眼镜/, "glasses", "subject"],
   [/模特|模特兒/, "professional fashion model", "subject"],
   [/穿搭/, "styled outfit", "subject"],
@@ -772,7 +780,7 @@ const META_RULES = [
   [/溫馨|温馨/, "cozy", "subject"],
   [/浪漫/, "romantic", "subject"],
   [/夢幻|梦幻/, "dreamy", "subject"],
-  [/街道|馬路|马路/, "street", "scene"],
+  [/街道|馬路|马路|街頭|街头/, "street", "scene"],
   [/海灘|沙灘|海滩/, "beach", "scene"],
   [/辦公室|办公室/, "office", "scene"],
   [/臥室|卧室/, "bedroom", "scene"],
@@ -807,6 +815,7 @@ const META_RULES = [
   [/走路|走/, "walking", "action"],
   [/看著|看着|看/, "looking", "action"],
   [/拿著|拿着|拿/, "holding", "action"],
+  [/恭敬/, "respectfully", "action"],
   [/合成/, "seamlessly composited", "action"],
   [/放到|放在/, "placed in", "action"],
   [/陽光下|阳光下/, "sunlit", "light"],
@@ -893,11 +902,12 @@ function expandMetaPrompt(draft, mode) {
     pushTo("scene", "inside the glass counter");
     return " ";
   });
-  // 單字對照：按表順序套用，配到的就吃掉原文。
+  // 單字對照：按表順序套用，配到的就吃掉原文（同一詞出現多次一次吃乾淨，
+  // 免得重複的詞留在殘詞裡）。
   for (const [re, en, bucket] of META_RULES) {
     if (re.test(work)) {
       pushTo(bucket, en);
-      work = work.replace(re, " ");
+      work = work.replace(new RegExp(re.source, "g"), " ");
     }
   }
   // 剩下的拉丁字母專名（CHUFENG、RTX 5090 這類）原樣保留。
@@ -909,10 +919,12 @@ function expandMetaPrompt(draft, mode) {
   }
   // 剩下的中文：去掉量詞、虛詞與標點，留下的原樣保留，不丟資訊。
   // 單字殘片（穿、時、直這類）幾乎不帶資訊，丟掉；多字殘詞留著給模型讀。
+  // 「明顯／形象」這類修飾語的意思已由翻譯出的詞表達，殘詞裡直接去掉。
   let rest = work
     .replace(/一[台隻只張张座條条個个]/g, " ")
-    .replace(/[有的是在了和與与跟把被很非常要讓让請请到里上中着一]/g, " ")
-    .replace(/[，,。.!！?？；;：:、\s]+/g, " ")
+    .replace(/[有的是在了和與与跟把被很非常要讓让請请到里上中着一正]/g, " ")
+    .replace(/明顯|明显|形象/g, " ")
+    .replace(/[，,。.!！?？；;：:、（）()\s]+/g, " ")
     .trim();
   rest = rest.split(" ").filter((t) => t.length >= 2).join(" ");
   if (rest.replace(/\s/g, "").length < 2) rest = "";
