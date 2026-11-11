@@ -1001,6 +1001,13 @@ function expandMetaPrompt(draft, mode) {
   // 參考模式：先定調「保住原圖」再寫新內容（倉庫 id 2 的寫法）。
   const isRef = mode && mode !== "t2i";
   if (isRef) parts.push("preserve the original composition, lighting, and identity");
+  // Gemini 建議＋Qwen3-VL 特性：它原生懂中文長句，主謂賓放最前面權重最高。
+  // 沒走互動句時，把用戶原句（中文）放最前面保住結構，後面英文是增強；
+  // 殘詞就不再另附（原句裡已有）。走互動句時英文句已寫清，不再重複。
+  // 只有含中文的初稿才這樣做，純英文初稿不受影響。
+  const chineseCore = text.replace(/<image[1-4]>/gi, " ").replace(/\s+/g, " ").trim();
+  const useChineseCore = !offer && /[\u4e00-\u9fff]/.test(chineseCore);
+  if (useChineseCore) parts.push(chineseCore);
   parts.push(...subject, ...action);
   parts.push(...scene);
   if (light.length) parts.push(...light);
@@ -1023,7 +1030,7 @@ function expandMetaPrompt(draft, mode) {
   parts.push(isRef
     ? "ultra-detailed, seamless edit, 8k quality, masterpiece quality"
     : "ultra-detailed, 8k quality, masterpiece quality");
-  if (rest) parts.push(rest);
+  if (rest && !useChineseCore) parts.push(rest);
   return parts.filter(Boolean).join(", ");
 }
 
