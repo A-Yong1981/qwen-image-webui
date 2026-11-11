@@ -718,7 +718,9 @@ const META_RULES = [
   [/美女/, "beautiful woman", "subject"],
   [/妹子/, "young woman", "subject"],
   [/人像|肖像/, "portrait", "subject"],
-  [/人/, "person", "subject"],
+  // 「人」不單獨成規則：它會吃掉「中國人／日本人」裡的人，多出一個
+  // 沒人要的 person（2026-11-11 獻酒圖因此多出第三個人）。中國人、
+  // 日本人由下面的中國／日本規則處理，剩下的單字人由殘詞過濾掉。
   [/中國風|中国风/, "Chinese style", "subject"],
   [/中國|中国/, "Chinese", "subject"],
   [/日本/, "Japanese", "subject"],
@@ -816,6 +818,7 @@ const META_RULES = [
   [/看著|看着|看/, "looking", "action"],
   [/拿著|拿着|拿/, "holding", "action"],
   [/恭敬/, "respectfully", "action"],
+  [/殷勤/, "respectfully", "action"],
   [/合成/, "seamlessly composited", "action"],
   [/放到|放在/, "placed in", "action"],
   [/陽光下|阳光下/, "sunlit", "light"],
@@ -862,6 +865,55 @@ const META_RULES = [
   [/霧面|雾面/, "matte finish", "style"],
 ];
 
+// 雙人互動句（A 給／向 B 獻酒／敬酒）：把「誰給誰」寫成完整英文句，
+// 避免關鍵字平鋪後模型猜錯主客（2026-11-11 獻酒圖：酒敬給了另一位
+// 女性、男主角只剩背景路人，就是因為提示詞只有一堆散詞，沒有主謂賓）。
+// 回傳 { sentence, used }，used 是已寫進句子的原文詞，呼叫方要從 work
+// 裡清掉，避免關鍵字迴圈重複加一次。解析不到回傳 null，走原本邏輯。
+function buildOfferSentence(draft) {
+  if (!/(给|給|向)/.test(draft)) return null;
+  if (!/(献酒|敬酒|獻酒)/.test(draft)) return null;
+  const m = draft.match(/^(.*?)(\s*)(给|給|向)(\s*)(.*)$/);
+  if (!m) return null;
+  const left = m[1];
+  const right = m[5];
+  // 右邊：對象在獻酒／敬酒之前那段。
+  const rightObj = right.split(/献酒|敬酒|獻酒/)[0];
+  // 取人：修飾語（帥／美／年輕）＋國籍＋人＋衣著，照英文形容詞順序排好。
+  const pickPerson = (frag) => {
+    let nat = "";
+    if (/日本/.test(frag)) nat = "Japanese";
+    else if (/中国|中國/.test(frag)) nat = "Chinese";
+    let adj = "", noun = "";
+    if (/帅哥|帥哥/.test(frag)) { adj = "handsome"; noun = "man"; }
+    else if (/美女/.test(frag)) { adj = "beautiful"; noun = "woman"; }
+    else if (/妹子/.test(frag)) { adj = "young"; noun = "woman"; }
+    else if (/女孩|女子|女人/.test(frag)) { adj = "young"; noun = "woman"; }
+    else if (/男孩|男子|男人/.test(frag)) { noun = "man"; }
+    else return null;
+    let cloth = "";
+    if (/比基尼/.test(frag)) cloth = "in a bikini";
+    else if (/连衣裙|連衣裙|洋装|洋裝/.test(frag)) cloth = "in a dress";
+    else if (/旗袍/.test(frag)) cloth = "in a cheongsam";
+    else if (/西装|西裝/.test(frag)) cloth = "in a tailored suit";
+    const bits = ["a", adj, nat, noun, cloth].filter(Boolean);
+    return bits.join(" ");
+  };
+  const subj = pickPerson(left);
+  const obj = pickPerson(rightObj);
+  if (!subj || !obj) return null;
+  // 場景：街頭／街道，有日本就寫 Japanese street。
+  let scene = "";
+  if (/街头|街頭|街道|马路|馬路/.test(left) || /街头|街頭|街道|马路|馬路/.test(rightObj)) {
+    scene = /日本/.test(draft) ? "on a Japanese street" : "on a street";
+  }
+  let sentence = subj + " respectfully offers a glass of wine to " + obj;
+  if (scene) sentence += " " + scene;
+  // 已寫進句子的原文詞，呼叫方清掉，避免重複。
+  const used = [/日本/g, /中国|中國/g, /女孩|女子|女人|帅哥|帥哥|美女|妹子|男孩|男子|男人/g, /比基尼|连衣裙|連衣裙|洋装|洋裝|旗袍|西装|西裝/g, /殷勤|恭敬/g, /献酒|敬酒|獻酒/g, /街头|街頭|街道|马路|馬路/g, /给|給|向/g];
+  return { sentence, used };
+}
+
 // 把口語初稿擴寫成結構化英文提示詞，按倉庫高品質提示詞的六段結構
 // 固定順序：主體與動作 → 場景環境 → 光線 → 鏡頭與構圖 → 風格質感 → 質量詞。
 // <imageN> 引用與 CHUFENG 這類專名原樣保留；對不上的中文原樣留著
@@ -902,6 +954,13 @@ function expandMetaPrompt(draft, mode) {
     pushTo("scene", "inside the glass counter");
     return " ";
   });
+  // 雙人互動句先處理：A 給 B 獻酒／敬酒時寫成完整句，綁定誰給誰，
+  // 寫進句子的詞從 work 清掉，免得關鍵字迴圈重複加一次。
+  const offer = buildOfferSentence(text);
+  if (offer) {
+    pushTo("subject", offer.sentence);
+    for (const re of offer.used) work = work.replace(re, " ");
+  }
   // 單字對照：按表順序套用，配到的就吃掉原文（同一詞出現多次一次吃乾淨，
   // 免得重複的詞留在殘詞裡）。
   for (const [re, en, bucket] of META_RULES) {
@@ -923,7 +982,7 @@ function expandMetaPrompt(draft, mode) {
   let rest = work
     .replace(/一[台隻只張张座條条個个]/g, " ")
     .replace(/[有的是在了和與与跟把被很非常要讓让請请到里上中着一正]/g, " ")
-    .replace(/明顯|明显|形象/g, " ")
+    .replace(/明顯|明显|形象|特征|特徵/g, " ")
     .replace(/[，,。.!！?？；;：:、（）()\s]+/g, " ")
     .trim();
   rest = rest.split(" ").filter((t) => t.length >= 2).join(" ");
