@@ -421,6 +421,18 @@ def kaggle_get(settings, path, timeout=60):
     return _open(req, timeout)
 
 
+def delete_kaggle_kernel(credentials, kernel_owner):
+    """任務結束後把 Kaggle 上的內核刪掉：提示詞寫在內核代碼裡、圖片在
+    內核輸出裡，刪內核就一起清掉，服務器上不留底。刪不掉也不影響任務
+    本身（圖已在 NAS 上），只記日誌。"""
+    try:
+        kaggle_post(credentials, "/kernels.KernelsApiService/DeleteKernel",
+                    {"userName": kernel_owner, "kernelSlug": KERNEL_SLUG},
+                    timeout=60)
+    except Exception:
+        traceback.print_exc()
+
+
 def download_bytes(url, timeout=600):
     """下載 Kaggle 輸出檔。輸出連結是帶簽名的直連位址，不用帶認證。"""
     req = urllib.request.Request(url)
@@ -856,6 +868,9 @@ def run_job(job):
     kernel_owner = server["username"]
     kernel_ref = f"{kernel_owner}/{KERNEL_SLUG}"
     credentials = {"username": server["username"], "key": server["key"]}
+    # 內核有沒有真的推上 Kaggle：推上了，任務結束就要刪掉（提示詞與
+    # 圖片都在上面）；沒推上就不用刪。finally 裡統一處理。
+    pushed = False
     try:
         script = build_kernel_script(job["prompt"], job.get("options"))
         # 排隊時被取消就直接停，不要提交到 Kaggle。
@@ -882,6 +897,7 @@ def run_job(job):
         }
         resp = kaggle_post(credentials, "/kernels.KernelsApiService/SaveKernel",
                            body, timeout=120)
+        pushed = True
         version = resp.get("versionNumber") if isinstance(resp, dict) else None
         # 只有還是 queued 才改成 running；改了 0 行就是剛被取消，直接停。
         if not try_start_job(job_id, version):
@@ -931,6 +947,12 @@ def run_job(job):
     except Exception:
         traceback.print_exc()
         fail_job(job_id, "後端內部錯誤，請稍後再試一次")
+    finally:
+        # 不管成功、失敗、取消還是超時，任務一結束就把 Kaggle 上的內核
+        # 刪掉：提示詞在內核代碼裡、圖片在輸出裡，刪內核就一起清掉。
+        # 圖已經下載到 NAS 上了，刪不掉也不影響任務本身。
+        if pushed:
+            delete_kaggle_kernel(credentials, kernel_owner)
 
 
 def worker_loop_for_server(server_id):
