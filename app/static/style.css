@@ -204,6 +204,7 @@ main {
 .gen-layout {
   display: grid;
   grid-template-columns: 45fr 55fr;
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
   flex: 1;
@@ -262,6 +263,7 @@ main {
 .preview-cols {
   display: grid;
   grid-template-columns: 45fr 55fr;
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   flex: 1;
   min-height: 0;
