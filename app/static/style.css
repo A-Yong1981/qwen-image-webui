@@ -286,9 +286,28 @@ main {
 .preview-img {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* 預覽圖：圖片按可用高度等比縮放，整張圖加下方按鈕一屏放下、不滾動。
+   外框佔滿剩餘高度、圖片置中；按鈕列固定在底部不被擠走。 */
+.preview-img .img-wrap {
+  flex: 1;
+  min-height: 0;
+  margin-top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.preview-img .img-wrap .result {
+  max-height: 100%;
+  object-fit: contain;
+}
+#resultActions {
+  flex-shrink: 0;
+  margin-top: 10px;
 }
 
 /* 預覽區底部固定的快照參數標籤（一行小字）。 */
@@ -703,6 +722,9 @@ code {
   .preview-prompt { overflow: visible; }
   .preview-prompt .prompt { overflow: visible; }
   .gen-preview { width: 100%; overflow: visible; }
+  /* 窄屏：圖片區恢復自然高度、整頁滾動，不再按高度縮放。 */
+  .preview-img .img-wrap { display: block; }
+  .preview-img .img-wrap .result { max-height: none; }
   .preview-img { overflow: visible; }
   .settings-cards { display: flex; flex-direction: column; }
   .settings-card { min-width: 0; overflow: visible; }
