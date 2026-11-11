@@ -1,118 +1,778 @@
-/* Qwen 生圖工作台：iOS 清新風格，生機盎然版
-   背景是春天嫩綠 → 薄荷 → 亮青 → 天空藍，右上角帶一點陽光暖調；
-   卡片保持白色磨砂，文字保證可讀；不改任何元素 id 與功能。
-   生圖頁一屏放下：整頁是 100vh 的 flex 欄（頁頭、頁籤、內容），
-   頁面本身不滾動；控制區、預覽區各自在內部滾動。
-   窄屏（手機）恢復上下疊、頁面滾動，見下方 @media (max-width: 900px)。 */
-* { box-sizing: border-box; }
+/* Qwen 生圖工作台 v2.21：UI 優化版
+   以一屏自適應 + 全局美化 + 歷史網格 + 全屏燈箱為底，
+   並保留 v2.19（flex 最小尺寸修復）與 v2.20（圖片區垂直滑杆）的兜底，
+   補齊現有 JS 渲染結構（.ref-thumb、伺服器列表、無圖佔位）與手機版。
+   一屏自適應的說法未在用戶環境驗證過（v2.16/18/19 同機制都沒修好），
+   所以滑杆留著當兜底：圖縮得下就一屏放下，縮不下就滑杆看完。 */
+@charset "utf-8";
 
-html, body { height: 100%; }
+:root {
+  --primary: #0d9488;
+  --primary-hover: #0f766e;
+  --primary-soft: rgba(13, 148, 136, 0.12);
+  --danger: #ef4444;
+  --danger-hover: #dc2626;
+  --bg-gradient: linear-gradient(135deg, #e6fcf5 0%, #c3fae8 50%, #a5f3fc 100%);
+  --card-bg: rgba(255, 255, 255, 0.92);
+  --border-subtle: rgba(13, 148, 136, 0.18);
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  --stage-bg: #0b1120;
+  --radius-lg: 16px;
+  --radius-md: 10px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 body {
-  margin: 0;
-  font-family: -apple-system, "SF Pro", "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
-  background:
-    radial-gradient(640px 320px at 88% -8%, rgba(255, 222, 130, 0.55), rgba(255, 222, 130, 0) 70%),
-    linear-gradient(160deg, #CFF7C9 0%, #A8EBC9 32%, #7FDCDD 62%, #7CC6F7 100%);
-  background-attachment: fixed;
-  color: #1F3D4D;
-  line-height: 1.55;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  background: var(--bg-gradient);
+  color: var(--text-main);
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden; /* 锁定整页一屏，消除浏览器外层滚动条 */
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  padding: 12px 18px;
+  gap: 10px;
 }
 
-/* 頂欄：iOS 導航欄式半透明磨砂白，固定在頂部。 */
+.hidden {
+  display: none !important;
+}
+
+/* ================= 1. 登入遮罩界面 (#authScreen) ================= */
+.auth-screen {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(12px);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-box {
+  background: #ffffff;
+  padding: 28px 32px;
+  border-radius: var(--radius-lg);
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-box h1 {
+  font-size: 20px;
+  color: var(--primary);
+}
+
+.auth-box h2 {
+  font-size: 16px;
+  color: var(--text-main);
+}
+
+/* ================= 2. 顶部 Header 与状态栏 ================= */
 header {
-  flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.78);
-  -webkit-backdrop-filter: blur(18px) saturate(1.6);
-  backdrop-filter: blur(18px) saturate(1.6);
-  border-bottom: 1px solid rgba(10, 138, 104, 0.12);
-  padding: 6px 14px;
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-}
-
-.header-text { min-width: 0; }
-header h1 { margin: 0; font-size: 18px; font-weight: 700; color: #0A8A68; letter-spacing: 0.2px; }
-header .sub { margin: 2px 0 0; color: #4A7A6A; font-size: 13px; }
-
-/* 伺服器狀態：頁面右上角小膠囊，兩行小字；窄屏時自動換到標題下方。 */
-.header-status {
+  align-items: center;
   flex-shrink: 0;
-  max-width: 55%;
-  text-align: right;
-  font-size: 12px;
-  line-height: 1.6;
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(10, 138, 104, 0.16);
-  border-radius: 16px;
-  padding: 6px 10px;
-  box-shadow: 0 4px 14px rgba(10, 138, 104, 0.08);
+  height: 60px;
 }
 
-.header-status p { margin: 2px 0; color: #3D6B58; }
+.header-text h1 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f766e;
+}
 
-/* 右上角伺服器切換器：狀態膠囊裡的一行，小字標籤加緊湊下拉選單。 */
+.header-text .sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.header-status {
+  background: var(--card-bg);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 6px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 280px;
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.06);
+}
+
 .server-switch {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 8px;
-  margin: 2px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
-.server-switch label {
-  margin: 0;
+.server-switch select {
+  flex: 1;
+  padding: 3px 8px;
   font-size: 12px;
-  font-weight: 700;
-  color: #3D6B58;
+}
+
+.header-status .note {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ================= 3. 主导航 Tabs (nav.tabs) ================= */
+nav.tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background: rgba(13, 148, 136, 0.15);
+  padding: 4px;
+  border-radius: 999px;
+  height: 38px;
   flex-shrink: 0;
+}
+
+nav.tabs .tab {
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #115e59;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+nav.tabs .tab.active {
+  background: #ffffff;
+  color: var(--primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+/* ================= 4. 主工作区容器 (main & .panel) ================= */
+main {
+  flex: 1;
+  min-height: 0; /* 关键：限制主容器高度不超出剩余视口 */
+  display: flex;
+}
+
+section.panel {
+  display: none;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+section.panel.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 通用表单与文字组件美化 */
+label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 4px;
+  margin-top: 6px;
+}
+
+textarea, input[type="text"], input[type="number"], input[type="password"], select {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: var(--radius-md);
+  padding: 7px 10px;
+  font-size: 12.5px;
+  background: #f8fafc;
+  color: var(--text-main);
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+textarea:focus, input:focus, select:focus {
+  outline: none;
+  background: #ffffff;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.15);
+}
+
+.note {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin-top: 3px;
+}
+
+.msg {
+  font-size: 12px;
+  color: var(--primary);
+  min-height: 16px;
+}
+
+.warn, .error {
+  font-size: 12px;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.row > div {
+  flex: 1;
+  min-width: 0;
+}
+
+button, a.primary {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: var(--text-main);
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-decoration: none;
+  transition: all 0.2s ease;
   white-space: nowrap;
 }
 
-.header-status .server-select {
-  flex: 0 0 auto;
-  width: auto;
-  min-width: 110px;
-  max-width: 200px;
-  padding: 6px 10px;
-  font-size: 14px;
-  border-radius: 999px;
-  background: #fff;
+button:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
-/* 設定頁「伺服器」卡片裡的列表：每台伺服器一行，名字、帳號、
-   金鑰狀態、數據集各一行，右邊是操作按鈕。 */
-.server-row {
+button.primary, a.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #ffffff;
+}
+
+button.primary:hover, a.primary:hover {
+  background: var(--primary-hover);
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.25);
+}
+
+button.btn-danger {
+  color: var(--danger);
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+button.btn-danger:hover {
+  background: var(--danger);
+  color: #ffffff;
+  border-color: var(--danger);
+}
+
+.mini-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  margin-left: 6px;
+}
+
+/* ================= 5. 生圖面板双栏一屏布局 (.gen-layout) ================= */
+.gen-layout {
+  display: grid;
+  grid-template-columns: 520px 1fr;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.gen-controls, .gen-preview {
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  height: 100%;
+  min-height: 0;
   display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 24px -4px rgba(13, 148, 136, 0.08);
+}
+
+/* 左侧生图控制面板 */
+.mode-seg {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background: #e2e8f0;
+  padding: 3px;
+  border-radius: 999px;
+  margin-bottom: 4px;
+}
+
+.mode-btn {
+  border: none;
+  background: transparent;
+  padding: 4px 0;
+  font-size: 12px;
+  color: #475569;
+}
+
+.mode-btn.active {
+  background: #ffffff;
+  color: var(--primary);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.ref-thumbs {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+/* 參考圖縮圖（app.js 渲染的 .ref-thumb 包一層，裡面是圖加移除按鈕）：
+   方案原稿只寫了 .ref-thumbs img，沒寫這層，不補會破版。 */
+.ref-thumb {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+
+.ref-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+}
+
+.ref-thumb button {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  line-height: 1;
+  border: none;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ctrl-cols {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-top: 6px;
+}
+
+/* 左右兩欄都要 min-width/min-height: 0，否則 grid 會被內容撐破。 */
+.ctrl-prompt, .ctrl-params {
+  min-width: 0;
+  min-height: 0;
+}
+
+.btn-row {
+  margin-top: 6px;
+}
+
+.btn-row button {
+  flex: 1;
+}
+
+/* ================= 6. 右侧预览区：竖图一屏显示 + 滑杆兜底 ================= */
+#currentJob {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+#currentStatus {
+  font-size: 12px;
+  color: #0f766e;
+  background: rgba(13, 148, 136, 0.08);
+  padding: 6px 12px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.preview-cols {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  min-height: 0; /* 核心属性：允许 Flex 子元素自适应收缩，绝不撑破一屏 */
+}
+
+/* 右侧左栏：提示词与参数说明 */
+.preview-prompt {
+  width: 310px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.prompt-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 10px;
-  border: 1px solid rgba(10, 138, 104, 0.14);
+}
+
+#currentPrompt {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-md);
+  padding: 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #1e293b;
+  overflow-y: auto;
+  max-height: 220px;
+  word-break: break-word;
+}
+
+.snapshot-tags {
+  font-size: 11.5px;
+  color: #0f766e;
+  background: #f0fdfa;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #ccfbf1;
+}
+
+.preview-actions {
+  margin-top: auto;
+  padding-top: 8px;
+  flex-wrap: wrap;
+}
+
+/* 右侧右栏：全高暗房画布 (#resultImgWrap)
+   v2.19/v2.20 保留修正（方案原稿沒有這兩處，直接套用會回退）：
+   ① 外框與圖片都要 min-width/min-height: 0，否則 flex 預設的 auto
+      最小尺寸會按圖片原始尺寸撐住、縮不下來；
+   ② 外框用 overflow-y: auto（不是 hidden），圖縮不下時滑杆接手，
+      不再把按鈕頂出畫面；
+   ③ 圖片加 margin: auto，縮得下時居中、溢出時靠上對齊才能滑動看到頂部，
+      否則 align-items: center 會把溢出的上半截切掉、滑不到。 */
+.preview-img {
+  flex: 1;
+  height: 100%;
+  min-width: 0;
+  min-height: 0; /* 核心属性：锁定图片列高度为剩余视口高度 */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#resultActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+#resultImgWrap {
+  flex: 1;
+  height: 100%;
+  min-height: 0; /* 关键：禁止内部竖图撑高容器 */
+  background: var(--stage-bg);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.7);
-  padding: 8px 10px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  overflow-y: auto;
+  box-shadow: inset 0 2px 12px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+#resultImg {
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+  width: auto;
+  height: auto;
+  margin: auto;
+  flex-shrink: 0;
+  object-fit: contain; /* 无论 9:16 竖图或 16:9 横图，100% 居中完整一屏显示 */
+  border-radius: 8px;
+  transition: filter 0.3s ease, transform 0.25s ease;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+
+.img-blurred {
+  filter: blur(26px) brightness(0.82);
+}
+
+.img-blur-hint {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.82);
+  backdrop-filter: blur(8px);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+/* ================= 7. 歷史紀錄网格卡片优化 (#tab-history) ================= */
+#tab-history {
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+}
+
+.history-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 6px;
+  flex-shrink: 0;
+}
+
+.history-head h2 {
+  font-size: 18px;
+  color: var(--text-main);
+  margin-right: auto;
+}
+
+.history-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.history-filter select {
+  width: 180px;
+}
+
+/* 响应式多列卡片瀑布流网格 */
+#historyList.history {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 4px 16px 2px;
   margin-top: 8px;
 }
 
-.server-meta { min-width: 0; }
-.server-meta p { margin: 2px 0; }
-.server-name { font-weight: 700; color: #1F3D4D; font-size: 15px; }
+.job-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 330px;
+  position: relative;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+}
 
-/* 「目前」小徽章：春綠底白字小膠囊。 */
-.server-current {
-  display: inline-block;
-  background: #0E9F7E;
-  color: #fff;
+.job-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 24px rgba(13, 148, 136, 0.14);
+  border-color: var(--primary);
+}
+
+.job-card .thumb-wrap {
+  height: 195px;
+  width: 100%;
+  background: var(--stage-bg);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.job-card .thumb {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transition: filter 0.3s ease, transform 0.3s ease;
+}
+
+.job-card:hover .thumb {
+  transform: scale(1.03);
+}
+
+.job-card .thumb-eye {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.job-card .job-info {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-height: 0;
+}
+
+.job-card .prompt-label {
+  display: none;
+}
+
+.job-card .prompt {
   font-size: 12px;
-  font-weight: 700;
+  color: #1e293b;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.job-card .note {
+  font-size: 11px;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.job-card .job-delete {
+  position: absolute;
+  bottom: 8px;
+  right: 10px;
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+/* 無圖佔位（app.js 渲染的 .thumb.none）：卡片頂部同樣留 195px 暗區。 */
+.job-card .thumb.none {
+  height: 195px;
+  width: 100%;
+  background: var(--stage-bg);
+  color: #94a3b8;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ================= 8. 設定面板优化 (#tab-settings) ================= */
+#tab-settings {
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+  overflow-y: auto;
+}
+
+.settings-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.5fr;
+  gap: 16px;
+  margin-top: 12px;
+  align-items: start;
+}
+
+.settings-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.server-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  margin-bottom: 8px;
+}
+
+.server-current {
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 11px;
+  padding: 2px 8px;
   border-radius: 999px;
-  padding: 1px 8px;
-  margin-left: 4px;
+  margin-left: 6px;
+}
+
+/* 伺服器列表（app.js 渲染的 .server-meta/.server-name/.server-actions）：
+   方案原稿只寫了 .server-row 與 .server-current，沒寫這三個，不補會破版。 */
+.server-meta {
+  min-width: 0;
+}
+
+.server-meta p {
+  margin: 2px 0;
+}
+
+.server-name {
+  font-weight: 700;
+  color: var(--text-main);
+  font-size: 14px;
 }
 
 .server-actions {
@@ -126,636 +786,202 @@ header .sub { margin: 2px 0 0; color: #4A7A6A; font-size: 13px; }
 .server-actions button {
   margin-top: 0;
   padding: 6px 12px;
-  font-size: 14px;
+  font-size: 12.5px;
 }
 
-/* 頁籤：iOS 分段控制器——膠囊形底座，選中那段是白色帶柔和陰影。
-   寬度要寫死（body 是 flex 欄，auto margin 會讓它縮成內容寬、
-   按鈕文字跟著折行）。 */
-.tabs {
-  flex-shrink: 0;
-  display: flex;
-  gap: 4px;
-  padding: 4px;
-  width: calc(100% - 24px);
-  margin: 8px auto 0;
-  background: rgba(10, 138, 104, 0.10);
-  border-radius: 999px;
-}
-
-.tab {
-  flex: 1;
-  margin-top: 0;
-  padding: 6px 10px;
-  border: none;
-  background: transparent;
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 16px;
-  font-weight: 500;
-  color: #4A7A6A;
-}
-
-.tab.active {
-  background: #fff;
-  color: #0A8A68;
-  font-weight: 700;
-  box-shadow: 0 2px 8px rgba(10, 138, 104, 0.16);
-}
-
-main {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  margin: 0 auto;
-  padding: 8px 12px 10px;
-}
-
-/* 面板：白色半透明磨砂卡片，大圓角、柔和春綠陰影。
-   桌面上一屏放下：面板佔滿剩餘高度，內容在面板內部滾動。 */
-.panel {
-  display: none;
-  background: rgba(255, 255, 255, 0.88);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(10, 138, 104, 0.14);
-  border-radius: 20px;
-  padding: 12px;
-  margin-top: 8px;
-  box-shadow: 0 10px 28px rgba(10, 138, 104, 0.09);
-  flex: 1;
-  min-height: 0;
-}
-
-.panel.active { display: flex; flex-direction: column; }
-
-/* 生圖頁不滾動：左右兩欄自己在內部滾動。
-   歷史、設定頁內容長了，在面板內部滾動。 */
-#tab-generate.panel.active { overflow: hidden; }
-#tab-history.panel.active { overflow-y: auto; }
-/* 設定頁不整頁滾動：四張卡自己在內部滾動。 */
-#tab-settings.panel.active { overflow: hidden; }
-
-/* 生圖頁：全屏橫版嵌套雙列——左控制區 45%、右預覽區 55%，
-   左區內再分提示詞 55% / 參數 45%，右區內再分提示詞 45% / 圖片 55%。
-   桌面上一屏放下不滾動；欄位不夠高時各自在內部滾動。 */
-.gen-layout {
-  display: grid;
-  grid-template-columns: 45fr 55fr;
-  grid-template-rows: minmax(0, 1fr);
-  gap: 14px;
-  align-items: stretch;
-  flex: 1;
-  min-height: 0;
-}
-
-.gen-controls {
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  padding-right: 4px;
-}
-
-.gen-controls label { margin: 6px 0 3px; }
-.gen-controls .note { font-size: 12px; }
-
-/* 左區內部雙欄：提示詞塊 55%、參數塊 45%。 */
-.ctrl-cols {
-  display: grid;
-  grid-template-columns: 55fr 45fr;
-  gap: 12px;
-  flex: 1;
-  min-height: 0;
-  margin-top: 4px;
-}
-
-.ctrl-prompt,
-.ctrl-params {
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-/* 擴寫＋生圖兩個按鈕並排。 */
-.btn-row { flex-wrap: nowrap; }
-.btn-row button { flex: 1; min-width: 0; white-space: nowrap; }
-
-.gen-preview {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(214, 246, 226, 0.55));
-  border: 1px solid rgba(10, 138, 104, 0.14);
-  border-radius: 16px;
-  padding: 12px;
-}
-
-.gen-preview h2 { margin: 0 0 6px; }
-
-/* 右區內部雙欄：提示詞區 45%、圖片區 55%。 */
-.preview-cols {
-  display: grid;
-  grid-template-columns: 45fr 55fr;
-  grid-template-rows: minmax(0, 1fr);
-  gap: 12px;
-  flex: 1;
-  min-height: 0;
-  margin-top: 6px;
-}
-
-.preview-prompt {
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.preview-prompt .prompt {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  margin: 2px 0;
-}
-
-.preview-img {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-/* 預覽圖：操作按鈕放圖片上方、固定可見；圖片區自己帶垂直滑杆，
-   圖再高也能滑動看完。圖片仍先按可用高度等比縮放（縮得下就一屏放下），
-   縮不下時滑杆接手，不再把按鈕頂出畫面。
-   外框與圖片都要 min-width/min-height: 0，否則 flex 預設的
-   auto 最小尺寸會按圖片原始尺寸撐住、縮不下來。 */
-.preview-img .img-wrap {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  margin-top: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  overflow-y: auto;
-}
-.preview-img .img-wrap .result {
-  min-width: 0;
-  min-height: 0;
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-#resultActions {
-  flex-shrink: 0;
-  margin-top: 0;
-  margin-bottom: 10px;
-}
-
-/* 預覽區底部固定的快照參數標籤（一行小字）。 */
-.snapshot-tags {
-  margin-top: auto;
-  padding-top: 8px;
-  font-size: 12px;
-  color: #3D6B58;
-  background: rgba(214, 246, 226, 0.55);
-  border: 1px solid rgba(10, 138, 104, 0.14);
-  border-radius: 10px;
-  padding: 6px 10px;
-  line-height: 1.6;
-  word-break: break-word;
-}
-.snapshot-tags:empty { display: none; }
-
-/* 提示詞框右上角的小複製按鈕。 */
-.mini-btn {
-  margin: 0 0 0 8px;
-  padding: 2px 10px;
-  font-size: 12px;
-  vertical-align: middle;
-}
-
-/* 預覽區的操作按鈕（複製／再用／刪除）靠左一排，空間不夠自動換行。 */
-.preview-actions { margin-top: 10px; }
-
-/* 設定頁：四張卡一排四列（寬屏）或兩行兩列（中等寬度），佔滿全寬；
-   內容多時卡片內部自己滾動，整頁不出現垂直滾動條。 */
-.settings-cards {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  flex: 1;
-  min-height: 0;
-  margin-top: 10px;
-}
-
-.settings-card {
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(10, 138, 104, 0.14);
-  border-radius: 18px;
-  padding: 14px;
-  box-shadow: 0 6px 18px rgba(10, 138, 104, 0.07);
-}
-
-@media (max-width: 1200px) {
-  .settings-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
-.settings-card h3 { margin: 0 0 8px; }
-
-.panel h2 { margin: 0; font-size: 19px; color: #0A8A68; }
-.panel h3 { margin: 12px 0 4px; font-size: 16px; color: #0A8A68; }
-
-label { display: block; font-weight: 600; font-size: 15px; margin: 8px 0 4px; color: #1F3D4D; }
-
-textarea, input[type="text"], input[type="password"],
-input[type="number"], select {
-  width: 100%;
-  padding: 10px;
-  font-size: 15px;
-  color: #1F3D4D;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid #CDE8DA;
-  border-radius: 12px;
-  outline: none;
-  box-sizing: border-box;
-}
-
-textarea:focus, input[type="text"]:focus, input[type="password"]:focus,
-input[type="number"]:focus, select:focus {
-  border-color: #0E9F7E;
-  box-shadow: 0 0 0 3px rgba(14, 159, 126, 0.18);
-}
-
-/* 按鈕：全部膠囊形。主按鈕春綠填充白字；次按鈕白底春綠邊框。 */
-button, a.primary {
-  display: inline-block;
-  margin-top: 8px;
-  padding: 9px 18px;
-  font-size: 16px;
-  font-weight: 600;
-  border: 1px solid #BFE3D6;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
-  color: #0A8A68;
-  cursor: pointer;
-  text-decoration: none;
-}
-
-button.primary, a.primary {
-  background: #0E9F7E;
-  border-color: #0E9F7E;
-  color: #fff;
-  box-shadow: 0 6px 16px rgba(14, 159, 126, 0.28);
-}
-
-button:hover, a.primary:hover { opacity: 0.92; }
-
-/* 危險操作（刪除）：淡紅小膠囊，不搶主按鈕的風頭。 */
-.btn-danger {
-  background: rgba(214, 69, 69, 0.08);
-  border-color: rgba(214, 69, 69, 0.35);
-  color: #C0392B;
-  box-shadow: none;
-}
-
-/* 模式三段選擇：沿用上方頁籤的分段樣式。 */
-.mode-seg {
-  display: flex;
-  gap: 4px;
-  padding: 4px;
-  background: rgba(10, 138, 104, 0.10);
-  border-radius: 999px;
-}
-
-.mode-btn {
-  flex: 1;
-  margin-top: 0;
-  padding: 7px 10px;
-  border: none;
-  background: transparent;
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 15px;
-  font-weight: 500;
-  color: #4A7A6A;
-}
-
-.mode-btn.active {
-  background: #fff;
-  color: #0A8A68;
-  font-weight: 700;
-  box-shadow: 0 2px 8px rgba(10, 138, 104, 0.16);
-}
-
-input[type="file"] {
-  width: 100%;
-  margin-top: 6px;
-  font-size: 15px;
-  color: #1F3D4D;
-}
-
-input[type="range"] {
-  flex: 1;
-  accent-color: #0E9F7E;
-}
-
-.range-val {
-  min-width: 44px;
-  text-align: right;
-  font-weight: 700;
-  color: #0A8A68;
-  align-self: center;
-}
-
-/* 參考圖縮略圖：每張可單獨移除。 */
-.ref-thumbs {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-
-.ref-thumb {
-  position: relative;
-  width: 96px;
-  height: 96px;
-}
-
-.ref-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 12px;
-  border: 1px solid #CDE8DA;
-}
-
-.ref-thumb button {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  width: 24px;
-  height: 24px;
-  margin-top: 0;
-  padding: 0;
-  line-height: 1;
-  border: none;
-  border-radius: 50%;
-  background: #0E9F7E;
-  color: #fff;
-  font-size: 16px;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(10, 138, 104, 0.3);
-}
-
-.row { display: flex; gap: 12px; flex-wrap: wrap; }
-
-.row > div { flex: 1; min-width: 120px; }
-
-.hidden { display: none !important; }
-
-.msg { color: #0A8A68; min-height: 1.4em; }
-.warn { color: #A86A00; font-weight: bold; }
-.error { color: #C0392B; }
-.note { color: #4A7A6A; font-size: 13px; line-height: 1.5; }
-/* 預覽區頂部狀態欄：單行緊湊顯示，太長就截斷。 */
-.status { font-size: 14px; font-weight: bold; color: #0A8A68; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.prompt { font-weight: bold; word-break: break-word; white-space: pre-wrap; }
-
-.prompt-label {
-  font-size: 13px;
-  color: #4A7A6A;
-  margin: 8px 0 2px;
-  font-weight: bold;
-}
-
-/* 登入頁：同一套磨砂卡片，背景沿用頁面春綠漸變。 */
-.auth-screen {
+/* ================= 9. 全屏高清缩放灯箱 (Lightbox) ================= */
+.lightbox-overlay {
   position: fixed;
   inset: 0;
-  z-index: 100;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  background: linear-gradient(160deg, rgba(207, 247, 201, 0.97), rgba(168, 235, 201, 0.97) 40%, rgba(124, 198, 247, 0.97));
-  overflow-y: auto;
-  padding: 40px 16px;
-}
-
-.auth-box {
-  width: 100%;
-  max-width: 480px;
-  background: rgba(255, 255, 255, 0.9);
-  -webkit-backdrop-filter: blur(16px);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(10, 138, 104, 0.14);
-  border-radius: 20px;
-  padding: 26px 22px;
-  box-shadow: 0 16px 40px rgba(10, 138, 104, 0.13);
-}
-
-.auth-box h1 { margin: 0 0 8px; font-size: 22px; color: #0A8A68; }
-.auth-box h2 { margin: 8px 0; font-size: 18px; color: #1F3D4D; }
-
-code {
-  background: #E6F6EC;
-  padding: 2px 6px;
-  border-radius: 4px;
-  word-break: break-all;
-}
-
-.result {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  margin-top: 10px;
-  border: 1px solid rgba(10, 138, 104, 0.16);
-  border-radius: 16px;
-  box-shadow: 0 8px 22px rgba(10, 138, 104, 0.09);
-}
-
-/* 圖片模糊（公共場合防偷看）：預設全糊，點一下看原圖，再點一下糊回去。 */
-.img-blurred {
-  filter: blur(24px);
-}
-.img-wrap {
-  position: relative;
-  cursor: pointer;
-  margin-top: 10px;
-}
-.img-wrap .result {
-  margin-top: 0;
-}
-.img-blur-hint {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  font-size: 13px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  pointer-events: none;
-  white-space: nowrap;
-}
-/* 歷史記錄縮圖下的小眼睛開關：圖片在上、按鈕在下，緊貼圖片；
-   卡片再高也不會被推到底部。點一下看這張的原圖，再點一下糊回去。 */
-.thumb-wrap {
-  display: flex;
+  background: rgba(7, 10, 19, 0.92);
+  backdrop-filter: blur(12px);
+  z-index: 9999;
+  display: none;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  align-self: flex-start;
-  flex-shrink: 0;
-}
-.thumb-eye {
-  width: 28px;
-  height: 28px;
-  margin: 0;
-  padding: 0;
-  border: none;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
+  justify-content: center;
+  overflow: hidden;
+  user-select: none;
 }
 
-/* 歷史記錄 */
-.history-head {
+.lightbox-overlay.open {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
 }
 
-.history-head h2 { margin: 0; }
-.history-head button { margin-top: 0; }
-
-.history-filter {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 14px;
-  color: #334155;
-  white-space: nowrap;
-}
-
-.history-filter select {
-  padding: 6px 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(10, 138, 104, 0.25);
-  background: #fff;
-  font-size: 14px;
-}
-
-.history { display: grid; gap: 12px; margin-top: 12px; }
-
-.job-card {
-  display: flex;
-  gap: 12px;
-  border: 1px solid rgba(10, 138, 104, 0.14);
-  border-radius: 18px;
-  padding: 12px;
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.88);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 6px 18px rgba(10, 138, 104, 0.08);
-}
-
-.job-card:hover { border-color: #0E9F7E; }
-
-.thumb {
-  width: 96px;
-  height: 96px;
-  object-fit: cover;
-  border-radius: 12px;
-  flex-shrink: 0;
-}
-
-.thumb.none {
+.lightbox-viewport {
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #E2F5E9;
-  color: #5F8A72;
-  font-size: 13px;
+  cursor: grab;
 }
 
-.job-info { flex: 1; min-width: 0; }
-.job-info p { margin: 4px 0; }
+.lightbox-viewport.dragging {
+  cursor: grabbing;
+}
 
-/* 卡片上的小刪除按鈕：靠右上角，不擋提示詞。 */
-.job-delete {
-  margin-top: 0;
+.lightbox-img {
+  max-width: 92vw;
+  max-height: 86vh;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.75);
+  transform-origin: center center;
+  transition: transform 0.08s ease-out;
+}
+
+.lightbox-toolbar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(30, 41, 59, 0.88);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   padding: 6px 14px;
-  font-size: 14px;
-  flex-shrink: 0;
-  align-self: flex-start;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #f8fafc;
+  font-size: 12.5px;
 }
 
+.lightbox-toolbar button {
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  color: #ffffff;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.lightbox-toolbar button:hover {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.lightbox-close {
+  position: fixed;
+  top: 20px;
+  right: 26px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  font-size: 18px;
+}
+
+.lightbox-close:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+/* ================= 10. 手機版（方案原稿沒有，必須補） =================
+   方案原稿沒有任何響應式規則，.gen-layout 的 520px 固定左欄在
+   390px 手機屏上會直接溢出。這裡沿用舊版做法：窄屏恢復頁面滾動，
+   兩欄上下疊起來，控制區在上、預覽區在下；圖片區恢復自然高度。 */
 @media (max-width: 900px) {
-  /* 窄屏：恢復頁面滾動，兩欄上下疊起來，控制區在上、預覽區在下；
-     左右大區與內部雙欄都改成上下疊；設定卡片也上下疊。 */
-  body { display: block; height: auto; overflow: visible; }
-  main { display: block; }
-  .panel { overflow: visible; }
-  .panel.active { display: block; }
-  #tab-generate.panel.active { overflow: visible; }
-  #tab-history.panel.active,
-  #tab-settings.panel.active { overflow: visible; }
-  .gen-layout { display: flex; flex-direction: column; }
-  .ctrl-cols { display: flex; flex-direction: column; }
-  .preview-cols { display: flex; flex-direction: column; }
-  .gen-controls {
-    flex: none;
+  body {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+
+  header {
+    height: auto;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .header-status {
+    min-width: 0;
+    width: 100%;
+  }
+
+  main {
+    display: block;
+  }
+
+  section.panel.active {
+    display: block;
+  }
+
+  .gen-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .gen-controls, .gen-preview {
+    height: auto;
+    overflow: visible;
+  }
+
+  .ctrl-cols {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .preview-cols {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .preview-prompt {
     width: 100%;
     overflow: visible;
-    padding-right: 0;
   }
-  .ctrl-prompt, .ctrl-params { overflow: visible; }
-  .preview-prompt { overflow: visible; }
-  .preview-prompt .prompt { overflow: visible; }
-  .gen-preview { width: 100%; overflow: visible; }
-  /* 窄屏：圖片區恢復自然高度、整頁滾動，不再按高度縮放。 */
-  .preview-img .img-wrap { display: block; }
-  .preview-img .img-wrap .result { max-height: none; }
-  .preview-img { overflow: visible; }
-  .settings-cards { display: flex; flex-direction: column; }
-  .settings-card { min-width: 0; overflow: visible; }
+
+  .preview-img {
+    overflow: visible;
+  }
+
+  #resultImgWrap {
+    display: block;
+    overflow: visible;
+    min-height: 0;
+  }
+
+  #resultImg {
+    max-height: none;
+  }
+
+  .settings-cards {
+    display: flex;
+    flex-direction: column;
+  }
+
+  #tab-history, #tab-settings {
+    overflow: visible;
+  }
+
+  #historyList.history {
+    overflow: visible;
+  }
 }
 
 @media (max-width: 600px) {
-  header { flex-wrap: wrap; }
-  header h1 { font-size: 19px; }
-  .header-status {
-    flex-basis: 100%;
-    max-width: 100%;
-    text-align: left;
-    padding-top: 8px;
+  body {
+    padding: 8px 10px;
   }
-  .server-switch { justify-content: flex-start; }
-  .header-status .server-select { flex: 1; max-width: none; }
-  .server-row { flex-direction: column; }
-  .server-actions { justify-content: flex-start; }
-  .tab { font-size: 15px; }
-  .thumb { width: 72px; height: 72px; }
-  .panel { padding: 18px 14px; }
+
+  .header-text h1 {
+    font-size: 18px;
+  }
+
+  nav.tabs .tab {
+    font-size: 12px;
+  }
+
+  .history-filter select {
+    width: 140px;
+  }
+
+  .job-card {
+    height: 320px;
+  }
 }

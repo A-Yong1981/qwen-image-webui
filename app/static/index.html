@@ -154,6 +154,7 @@
               <div id="resultActions" class="hidden">
                 <a id="downloadBtn" class="primary" href="#" download>下載原圖</a>
                 <button id="blurToggleBtn" type="button">👁 看原圖</button>
+                <button id="openLightboxBtn" type="button">🔍 全屏縮放</button>
               </div>
               <div id="resultImgWrap" class="img-wrap hidden" title="點一下看原圖，再點一下糊回去">
                 <img id="resultImg" class="result" alt="生成的圖片">
@@ -236,5 +237,106 @@
 </main>
 
 <script src="app.js"></script>
+
+<!-- 全屏高清缩放灯箱 DOM -->
+<div class="lightbox-overlay" id="lightboxModal">
+  <button class="lightbox-close" id="lbCloseBtn" type="button" title="關閉 (ESC)">✕</button>
+  <div class="lightbox-viewport" id="lightboxViewport">
+    <img id="lightboxImg" class="lightbox-img" src="" alt="全屏預覽" draggable="false">
+  </div>
+  <div class="lightbox-toolbar">
+    <button type="button" id="lbZoomOut">➖ 縮小</button>
+    <span id="lbZoomText" style="min-width:48px;text-align:center;">100%</span>
+    <button type="button" id="lbZoomIn">➕ 放大</button>
+    <button type="button" id="lbReset">🔄 1:1 重置</button>
+    <span style="opacity:0.6;font-size:11px;margin-left:6px;">支援滾輪縮放 · 按住拖曳 · 雙擊圖片開啟</span>
+  </div>
+</div>
+
+<script>
+(function() {
+  const modal = document.getElementById('lightboxModal');
+  const lbImg = document.getElementById('lightboxImg');
+  const viewport = document.getElementById('lightboxViewport');
+  const zoomText = document.getElementById('lbZoomText');
+  const resultImg = document.getElementById('resultImg');
+  const openBtn = document.getElementById('openLightboxBtn');
+
+  let scale = 1, tx = 0, ty = 0, isDragging = false, startX = 0, startY = 0;
+
+  function applyTransform() {
+    lbImg.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    zoomText.textContent = `${Math.round(scale * 100)}%`;
+  }
+
+  function openLightbox(src) {
+    if (!src) return;
+    lbImg.src = src;
+    scale = 1; tx = 0; ty = 0;
+    applyTransform();
+    modal.classList.add('open');
+  }
+
+  function closeLightbox() {
+    modal.classList.remove('open');
+  }
+
+  // 1. 点击「🔍 全屏縮放」按钮或双击主预览图打开灯箱
+  if (openBtn) {
+    openBtn.addEventListener('click', () => openLightbox(resultImg.src));
+  }
+  if (resultImg) {
+    resultImg.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      openLightbox(resultImg.src);
+    });
+  }
+
+  // 2. 历史记录网格中：双击任意缩略图直接全屏查看高清大图
+  const historyList = document.getElementById('historyList');
+  if (historyList) {
+    historyList.addEventListener('dblclick', (e) => {
+      const thumb = e.target.closest('img.thumb');
+      if (thumb && thumb.src) {
+        e.stopPropagation();
+        openLightbox(thumb.src);
+      }
+    });
+  }
+
+  // 3. 滚轮缩放与拖拽平移逻辑
+  modal.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    scale = Math.min(Math.max(0.4, scale + (e.deltaY < 0 ? 0.25 : -0.25)), 6);
+    applyTransform();
+  }, { passive: false });
+
+  viewport.addEventListener('mousedown', (e) => {
+    if (e.target !== lbImg && e.target !== viewport) return;
+    isDragging = true;
+    startX = e.clientX - tx;
+    startY = e.clientY - ty;
+    viewport.classList.add('dragging');
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    tx = e.clientX - startX;
+    ty = e.clientY - startY;
+    applyTransform();
+  });
+
+  window.addEventListener('mouseup', () => {
+    isDragging = false;
+    viewport.classList.remove('dragging');
+  });
+
+  document.getElementById('lbZoomIn').addEventListener('click', () => { scale = Math.min(scale + 0.25, 6); applyTransform(); });
+  document.getElementById('lbZoomOut').addEventListener('click', () => { scale = Math.max(scale - 0.25, 0.4); applyTransform(); });
+  document.getElementById('lbReset').addEventListener('click', () => { scale = 1; tx = 0; ty = 0; applyTransform(); });
+  document.getElementById('lbCloseBtn').addEventListener('click', closeLightbox);
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+})();
+</script>
 </body>
 </html>
