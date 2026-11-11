@@ -293,19 +293,20 @@ main {
   flex-direction: column;
 }
 
-/* 預覽圖：圖片按可用高度等比縮放，整張圖加下方按鈕一屏放下、不滾動。
-   外框佔滿剩餘高度、圖片置中；按鈕列固定在底部不被擠走。
-   關鍵：外框與圖片都要 min-width/min-height: 0，否則 flex 預設的
-   auto 最小尺寸會按圖片原始尺寸撐住、縮不下來，max-width/max-height
-   就失效——這就是 v2.16、v2.18 兩次都沒修好的真正原因。 */
+/* 預覽圖：操作按鈕放圖片上方、固定可見；圖片區自己帶垂直滑杆，
+   圖再高也能滑動看完。圖片仍先按可用高度等比縮放（縮得下就一屏放下），
+   縮不下時滑杆接手，不再把按鈕頂出畫面。
+   外框與圖片都要 min-width/min-height: 0，否則 flex 預設的
+   auto 最小尺寸會按圖片原始尺寸撐住、縮不下來。 */
 .preview-img .img-wrap {
   flex: 1;
   min-width: 0;
   min-height: 0;
   margin-top: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  overflow-y: auto;
 }
 .preview-img .img-wrap .result {
   min-width: 0;
@@ -313,10 +314,12 @@ main {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  flex-shrink: 0;
 }
 #resultActions {
   flex-shrink: 0;
-  margin-top: 10px;
+  margin-top: 0;
+  margin-bottom: 10px;
 }
 
 /* 預覽區底部固定的快照參數標籤（一行小字）。 */
